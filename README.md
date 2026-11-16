@@ -8,8 +8,14 @@
 
 Open PowerShell in your target project directory and run:
 
+### Massgrave-Style (`irm | iex`):
 ```powershell
-& ([scriptblock]::Create((gh api -H "Accept: application/vnd.github.raw+json" repos/Reyansh-Niranjan/r2/contents/install.ps1)))
+irm -H @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/Reyansh-Niranjan/r2/main/install.ps1 | iex
+```
+
+### GitHub CLI Native Pipeline:
+```powershell
+(gh api -H "Accept: application/vnd.github.raw+json" repos/Reyansh-Niranjan/r2/contents/install.ps1 | Out-String) | iex
 ```
 
 *Or pass a target directory explicitly:*
