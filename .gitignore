@@ -1,0 +1,17 @@
+# R2 Repository Git Ignore
+__pycache__/
+*.py[cod]
+*$py.class
+*.swp
+*.bak
+.DS_Store
+Thumbs.db
+
+# ECC downloaded rules are private, local-only upstream assets
+.agents/skills/r2/rules/ecc/
+engine/rules/ecc/
+
+# Local testing and scratch artifacts
+test-project/
+scratch/
+temp/

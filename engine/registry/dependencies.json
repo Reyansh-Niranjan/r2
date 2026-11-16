@@ -1,0 +1,385 @@
+{
+  "version": "2.0.0",
+  "total_specialist_skills": 59,
+  "orchestrators": {
+    "r2": {
+      "command": "/r2",
+      "name": "r2",
+      "type": "informational_index",
+      "loads_reference_prompts": false,
+      "managed_skills_path": ".agents/skills/r2/skills/",
+      "routes": [
+        "/r2:init",
+        "/r2:code",
+        "/r2:motion",
+        "/r2:web",
+        "/r2:debug"
+      ]
+    },
+    "r2:init": {
+      "command": "/r2:init",
+      "name": "r2:init",
+      "type": "environment_scaffolding",
+      "loads_reference_prompts": false,
+      "pipeline": [
+        "project_and_skill_audit",
+        "install_missing_specialist_skills",
+        "impeccable_live_setup",
+        "graphify_install_and_hooks",
+        "setup_matt_pocock_skills",
+        "grill_me_project_lock",
+        "ecc_rule_verification",
+        "verify_installed_skills"
+      ],
+      "activated_skills": [
+        "impeccable",
+        "graphify",
+        "setup-matt-pocock-skills",
+        "grill-me"
+      ],
+      "required_skills": [
+        "graphify",
+        "grill-me"
+      ],
+      "optional_skills": [
+        "impeccable",
+        "setup-matt-pocock-skills",
+        "novaslate-setup-matt-pocock-skills"
+      ],
+      "persisted_state": ".agents/skills/r2/registry/project-profile.json"
+    },
+    "r2:code": {
+      "command": "/r2:code",
+      "name": "r2:code",
+      "type": "code_orchestration",
+      "loads_reference_prompts": true,
+      "reference_prompts": [
+        ".agents/skills/r2/references/claude-fable-5.2.md",
+        ".agents/skills/r2/references/claude-opus-5.5.md"
+      ],
+      "pipeline": [
+        "graphify_navigation",
+        "ponytail_and_karpathy_constraints",
+        "context7_docs_lookup",
+        "superpowers_and_architecture_scaffold",
+        "bounded_builder_execution",
+        "persona_critique_review"
+      ],
+      "activated_skills": [
+        "graphify",
+        "ponytail",
+        "ponytail-debt",
+        "karpathy-guidelines",
+        "context7",
+        "superpowers",
+        "codebase-design",
+        "domain-modeling",
+        "improve-codebase-architecture",
+        "persona-critique"
+      ],
+      "required_skills": [
+        "graphify",
+        "ponytail",
+        "karpathy-guidelines",
+        "persona-critique"
+      ],
+      "optional_skills": [
+        "ponytail-debt",
+        "ponytail-audit",
+        "ponytail-review",
+        "ponytail-gain",
+        "ponytail-help",
+        "context7",
+        "superpowers",
+        "codebase-design",
+        "domain-modeling",
+        "improve-codebase-architecture",
+        "arena",
+        "novaslate-ponytail",
+        "novaslate-ponytail-debt",
+        "novaslate-karpathy-guidelines",
+        "novaslate-codebase-design",
+        "novaslate-domain-modeling",
+        "novaslate-improve-codebase-architecture"
+      ],
+      "novaslate_specialist_routes": {
+        "overengineering_audit": "ponytail-audit",
+        "code_deletion_review": "ponytail-review",
+        "impact_scoreboard": "ponytail-gain",
+        "quick_reference": "ponytail-help",
+        "bracket_competition": "arena"
+      }
+    },
+    "r2:motion": {
+      "command": "/r2:motion",
+      "name": "r2:motion",
+      "type": "motion_orchestration",
+      "loads_reference_prompts": true,
+      "reference_prompts": [
+        ".agents/skills/r2/references/claude-fable-5.2.md",
+        ".agents/skills/r2/references/claude-opus-5.5.md"
+      ],
+      "inherits": "r2:code",
+      "references_dir": ".agents/skills/r2/references/claude-design/",
+      "motion_stack": [
+        "animate",
+        "animation-vocabulary",
+        "find-animation-opportunities",
+        "review-animations",
+        "motion",
+        "brag-slim",
+        "watch"
+      ],
+      "web_design_stack": [
+        "impeccable",
+        "apple-design",
+        "emil-design-eng",
+        "design-taste-frontend",
+        "minimalist-ui"
+      ],
+      "required_skills": [
+        "animate",
+        "motion",
+        "apple-design"
+      ],
+      "optional_skills": [
+        "animation-vocabulary",
+        "find-animation-opportunities",
+        "review-animations",
+        "brag-slim",
+        "watch",
+        "impeccable",
+        "emil-design-eng",
+        "design-taste-frontend",
+        "minimalist-ui",
+        "video-analyzer",
+        "novaslate-animate",
+        "novaslate-animation-vocabulary",
+        "novaslate-find-animation-opportunities",
+        "novaslate-review-animations",
+        "novaslate-emil-design-eng",
+        "novaslate-design-taste-frontend",
+        "novaslate-minimalist-ui"
+      ],
+      "novaslate_specialist_routes": {
+        "video_audit": "video-analyzer",
+        "frame_analysis": "video-analyzer"
+      },
+      "external_apis": {
+        "audio_sfx": "https://api.openverse.org/v1/audio/",
+        "pattern": "Prompt Motion (<inputs> + <direction>)"
+      }
+    },
+    "r2:web": {
+      "command": "/r2:web",
+      "name": "r2:web",
+      "type": "web_orchestration",
+      "loads_reference_prompts": true,
+      "reference_prompts": [
+        ".agents/skills/r2/references/claude-fable-5.2.md",
+        ".agents/skills/r2/references/claude-opus-5.5.md"
+      ],
+      "inherits": [
+        "r2:code",
+        "r2:motion/interaction"
+      ],
+      "design_contract_skills": [
+        "refero-design",
+        "awwwards"
+      ],
+      "implementation_skills": [
+        "impeccable",
+        "design-taste-frontend",
+        "minimalist-ui",
+        "mobile-native",
+        "shieldcn-badges",
+        "slopmonster",
+        "animate",
+        "apple-design",
+        "emil-design-eng"
+      ],
+      "copy_cleaner_skills": [
+        "humanizer"
+      ],
+      "qa_review_skills": [
+        "jury",
+        "persona-critique"
+      ],
+      "required_skills": [
+        "refero-design",
+        "impeccable",
+        "jury",
+        "persona-critique"
+      ],
+      "optional_skills": [
+        "awwwards",
+        "design-taste-frontend",
+        "minimalist-ui",
+        "mobile-native",
+        "shieldcn-badges",
+        "slopmonster",
+        "animate",
+        "apple-design",
+        "emil-design-eng",
+        "humanizer",
+        "novaslate-design-taste-frontend",
+        "novaslate-minimalist-ui",
+        "novaslate-mobile-native",
+        "novaslate-shieldcn-badges",
+        "novaslate-slopmonster",
+        "novaslate-animate",
+        "novaslate-emil-design-eng"
+      ]
+    },
+    "r2:debug": {
+      "command": "/r2:debug",
+      "name": "r2:debug",
+      "type": "debug_orchestration",
+      "loads_reference_prompts": true,
+      "reference_prompts": [
+        ".agents/skills/r2/references/claude-fable-5.2.md",
+        ".agents/skills/r2/references/claude-opus-5.5.md"
+      ],
+      "triage_skills": [
+        "diagnosing-bugs",
+        "graphify"
+      ],
+      "required_skills": [
+        "diagnosing-bugs",
+        "graphify"
+      ],
+      "optional_skills": [
+        "novaslate-diagnosing-bugs",
+        "arena",
+        "ponytail-audit",
+        "ponytail-review",
+        "ponytail",
+        "karpathy-guidelines",
+        "jury",
+        "review-animations",
+        "impeccable",
+        "apple-design",
+        "humanizer",
+        "grim-prompter"
+      ],
+      "routing_rules": {
+        "logic_or_backend": {
+          "orchestrators": [
+            "r2:code"
+          ],
+          "skills": [
+            "ponytail",
+            "karpathy-guidelines",
+            "ponytail-audit",
+            "ponytail-review"
+          ]
+        },
+        "ui_or_layout": {
+          "orchestrators": [
+            "r2:web",
+            "r2:code"
+          ],
+          "skills": [
+            "jury",
+            "impeccable"
+          ]
+        },
+        "animation_or_jitter": {
+          "orchestrators": [
+            "r2:motion",
+            "r2:code"
+          ],
+          "skills": [
+            "review-animations",
+            "video-analyzer"
+          ]
+        },
+        "slop_or_cheap_motion": {
+          "orchestrators": [
+            "r2:motion",
+            "r2:web",
+            "r2:code"
+          ],
+          "skills": [
+            "impeccable",
+            "apple-design",
+            "humanizer",
+            "slopmonster",
+            "novaslate-slopmonster"
+          ]
+        },
+        "security_or_prelaunch": {
+          "skills": [
+            "grim-prompter"
+          ]
+        },
+        "adversarial_bracket_testing": {
+          "skills": [
+            "arena"
+          ]
+        }
+      }
+    }
+  },
+  "inter_skill_dependencies": {
+    "ponytail-debt": {
+      "depends_on": "ponytail",
+      "type": "required"
+    },
+    "ponytail-audit": {
+      "depends_on": "ponytail",
+      "type": "required"
+    },
+    "ponytail-review": {
+      "depends_on": "ponytail",
+      "type": "required"
+    },
+    "ponytail-gain": {
+      "depends_on": "ponytail",
+      "type": "required"
+    },
+    "ponytail-help": {
+      "depends_on": "ponytail",
+      "type": "optional"
+    },
+    "novaslate-ponytail-debt": {
+      "depends_on": "novaslate-ponytail",
+      "type": "required"
+    },
+    "review-animations": {
+      "depends_on": "animate",
+      "type": "optional"
+    },
+    "novaslate-review-animations": {
+      "depends_on": "novaslate-animate",
+      "type": "optional"
+    }
+  },
+  "rule_provider": {
+    "provider": "ecc",
+    "source_repository": "https://github.com/affaan-m/ECC",
+    "pinned_commit": "d2ef2680594f9a17526a6e1a2e18b3d242c5d17b",
+    "source_directory": "rules",
+    "manifest": ".agents/skills/r2/rules/manifest.json",
+    "protocol": ".agents/skills/r2/rules/RULE_PROTOCOL.md",
+    "loader": ".agents/skills/r2/rules/loader.py",
+    "storage": ".agents/skills/r2/rules/ecc/",
+    "git_ignored": true,
+    "precedence_hierarchy": [
+      "1. System & Developer Instructions",
+      "2. User Instructions",
+      "3. Existing R2 Safety & Architectural Constraints",
+      "4. Project-Specific Instructions & Configuration",
+      "5. Applicable ECC Rules",
+      "6. Individual Specialist Guidance"
+    ],
+    "installed_packs": [
+      "common",
+      "typescript",
+      "react",
+      "web",
+      "python"
+    ],
+    "total_installed_files": 33
+  }
+}

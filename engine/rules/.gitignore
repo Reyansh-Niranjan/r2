@@ -1,0 +1,2 @@
+# Private third-party ECC rules; never commit or upload to repository
+ecc/
