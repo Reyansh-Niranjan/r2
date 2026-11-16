@@ -128,9 +128,13 @@ Write-Host "`n[3/5] Fetching R2 canonical engine from $REPO..." -ForegroundColor
 
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("r2-install-" + [System.Guid]::NewGuid().ToString("N"))
 try {
-    # If this installer is running inside a cloned repository, copy locally; otherwise clone via gh
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-    $isLocalSource = (Test-Path (Join-Path $scriptDir "commands")) -and (Test-Path (Join-Path $scriptDir "engine"))
+    # If this installer is running inside a local cloned repository, copy locally; otherwise clone via gh
+    $scriptPath = $MyInvocation.MyCommand.Path
+    $isLocalSource = $false
+    if ($scriptPath -and (Test-Path $scriptPath)) {
+        $scriptDir = Split-Path -Parent $scriptPath
+        $isLocalSource = (Test-Path (Join-Path $scriptDir "commands")) -and (Test-Path (Join-Path $scriptDir "engine"))
+    }
 
     if ($isLocalSource -and (-not $Force)) {
         Write-Host "  Using local canonical R2 source files from: $scriptDir"
