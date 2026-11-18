@@ -1,5 +1,5 @@
 # R2 Skill Orchestration System - Windows PowerShell Installer
-# Installs R2 command skills and engine into the target workspace from the private Reyansh-Niranjan/r2 repository.
+# Installs R2 command skills and engine into the target workspace from the private Reyansh-Niranjan/r2 repository or local source.
 
 [CmdletBinding()]
 param(
@@ -8,6 +8,7 @@ param(
 
     [switch]$AllSpecialists,
     [switch]$Force,
+    [switch]$Local,
     [switch]$SkipAuthCheck
 )
 
@@ -16,26 +17,30 @@ $ErrorActionPreference = "Stop"
 $REPO = "Reyansh-Niranjan/r2"
 $REQUIRED_USER = "Reyansh-Niranjan"
 
+if ($Local) {
+    $SkipAuthCheck = $true
+}
+
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "   R2 Skill Orchestration System - Windows Installer     " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
-# 1. Pre-flight Checks & Authentication (Fail-Closed)
+# 1. Pre-flight Checks & Authentication (Fail-Closed unless -Local/-SkipAuthCheck)
 # ---------------------------------------------------------------------------
 Write-Host "`n[1/5] Verifying prerequisites and authentication..." -ForegroundColor Yellow
 
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Error "Pre-flight Check Failed: 'git' is not installed or not in PATH. Please install Git for Windows and try again."
-    exit 1
-}
-
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    Write-Error "Pre-flight Check Failed: GitHub CLI ('gh') is not installed or not in PATH. Please install GitHub CLI (https://cli.github.com/) and try again."
-    exit 1
-}
-
 if (-not $SkipAuthCheck) {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Error "Pre-flight Check Failed: 'git' is not installed or not in PATH. Please install Git for Windows and try again."
+        exit 1
+    }
+
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        Write-Error "Pre-flight Check Failed: GitHub CLI ('gh') is not installed or not in PATH. Please install GitHub CLI (https://cli.github.com/) and try again."
+        exit 1
+    }
+
     # Check gh auth status
     $authStatus = gh auth status 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -63,14 +68,17 @@ if (-not $SkipAuthCheck) {
     }
     Write-Host "  [OK] Authenticated as authorized user '$authUser' with verified access to '$REPO'." -ForegroundColor Green
 } else {
-    Write-Host "  [WARN] Authentication check skipped by request." -ForegroundColor Magenta
+    Write-Host "  [WARN] Authentication check skipped by request (Local/SkipAuthCheck mode)." -ForegroundColor Magenta
 }
 
 # ---------------------------------------------------------------------------
-# 2. Target Workspace & Git Configuration
+# 2. Target Workspace & Git Tracking Policies
 # ---------------------------------------------------------------------------
 Write-Host "`n[2/5] Preparing target workspace and Git tracking policies..." -ForegroundColor Yellow
 
+if (-not (Test-Path $TargetDirectory)) {
+    New-Item -ItemType Directory -Path $TargetDirectory -Force | Out-Null
+}
 $TargetDirectory = (Resolve-Path $TargetDirectory).Path
 Write-Host "  Target directory: $TargetDirectory"
 
@@ -122,21 +130,24 @@ if (Test-Path $configFile) {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Download Canonical R2 Engine & Commands
+# 3. Resolve Canonical R2 Engine & Commands Source
 # ---------------------------------------------------------------------------
-Write-Host "`n[3/5] Fetching R2 canonical engine from $REPO..." -ForegroundColor Yellow
+Write-Host "`n[3/5] Resolving R2 canonical engine and specialist source..." -ForegroundColor Yellow
 
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("r2-install-" + [System.Guid]::NewGuid().ToString("N"))
 try {
-    # If this installer is running inside a local cloned repository, copy locally; otherwise clone via gh
+    # Check if installer is running inside a local cloned repository
     $scriptPath = $MyInvocation.MyCommand.Path
+    $scriptDir = if ($scriptPath -and (Test-Path $scriptPath)) { Split-Path -Parent $scriptPath } else { $PSScriptRoot }
     $isLocalSource = $false
-    if ($scriptPath -and (Test-Path $scriptPath)) {
-        $scriptDir = Split-Path -Parent $scriptPath
-        $isLocalSource = (Test-Path (Join-Path $scriptDir "commands")) -and (Test-Path (Join-Path $scriptDir "engine"))
+    if ($scriptDir -and (Test-Path (Join-Path $scriptDir "commands")) -and (Test-Path (Join-Path $scriptDir "engine"))) {
+        $isLocalSource = $true
+    } elseif (Test-Path "D:\R2\commands" -and (Test-Path "D:\R2\engine")) {
+        $scriptDir = "D:\R2"
+        $isLocalSource = $true
     }
 
-    if ($isLocalSource -and (-not $Force)) {
+    if ($Local -or ($isLocalSource -and ($Local -or $SkipAuthCheck -or (-not $Force)))) {
         Write-Host "  Using local canonical R2 source files from: $scriptDir"
         $sourceDir = $scriptDir
     } else {
@@ -149,10 +160,67 @@ try {
         $sourceDir = $tempDir
     }
 
+    # Discover valid specialists from source
+    $specialistsSource = Join-Path $sourceDir "specialists"
+    $validSpecialists = @()
+    if (Test-Path $specialistsSource) {
+        $validSpecialists = Get-ChildItem -Path $specialistsSource -Directory | Select-Object -ExpandProperty Name
+    }
+
     # ---------------------------------------------------------------------------
-    # 4. Install Command Skills and Engine
+    # 4. Cleanup Stale R2 Folders & Install Commands/Engine
     # ---------------------------------------------------------------------------
     Write-Host "`n[4/5] Installing R2 command skills and engine runtime..." -ForegroundColor Yellow
+
+    # Ensure target .agents/skills directory exists
+    if (-not (Test-Path $skillsDir)) {
+        New-Item -ItemType Directory -Path $skillsDir -Force | Out-Null
+    }
+
+    # 1. Clean stale R2 command skills (.agents/skills/r2-*)
+    Get-ChildItem -Path $skillsDir -Directory | Where-Object { $_.Name -like "r2-*" } | ForEach-Object {
+        Write-Host "  -> Removing stale R2 command skill: /$($_.Name)" -ForegroundColor Yellow
+        Remove-Item -Path $_.FullName -Recurse -Force
+    }
+
+    # 2. Clean .agents/skills/r2 (engine & specialists container)
+    $r2TargetDir = Join-Path $skillsDir "r2"
+    if (Test-Path $r2TargetDir) {
+        # Prune orphan specialist skills inside .agents/skills/r2/skills/
+        $r2SkillsDir = Join-Path $r2TargetDir "skills"
+        if (Test-Path $r2SkillsDir) {
+            $orphanSkills = Get-ChildItem -Path $r2SkillsDir -Directory | Where-Object { $_.Name -notin $validSpecialists }
+            foreach ($orphan in $orphanSkills) {
+                Write-Host "  -> Removing orphan specialist skill: r2/skills/$($orphan.Name)" -ForegroundColor Yellow
+                Remove-Item -Path $orphan.FullName -Recurse -Force
+            }
+        }
+
+        # Remove previous engine runtime folders and caches to ensure a clean slate (leave skills/ intact)
+        Get-ChildItem -Path $r2TargetDir | Where-Object { $_.Name -ne "skills" } | ForEach-Object {
+            Remove-Item -Path $_.FullName -Recurse -Force
+        }
+    } else {
+        New-Item -ItemType Directory -Path $r2TargetDir -Force | Out-Null
+    }
+
+    # 3. Log and verify non-R2 skills preservation
+    $nonR2Skills = Get-ChildItem -Path $skillsDir -Directory | Where-Object { $_.Name -ne "r2" -and $_.Name -notlike "r2-*" }
+    if ($nonR2Skills) {
+        Write-Host "  [OK] Preserving non-R2 skills in .agents/skills/: $(($nonR2Skills | Select-Object -ExpandProperty Name) -join ', ')" -ForegroundColor Green
+    }
+
+    # 4. Verify project state in .r2/ is preserved (never deleted or overwritten)
+    $preservedStateFiles = @("project-profile.json", "rules.md", "hardware-profile.json", "REVIEW.md")
+    $foundState = @()
+    foreach ($f in $preservedStateFiles) {
+        if (Test-Path (Join-Path $r2ConfigDir $f)) {
+            $foundState += $f
+        }
+    }
+    if ($foundState.Count -gt 0) {
+        Write-Host "  [OK] Preserving target project .r2/ state: $($foundState -join ', ')" -ForegroundColor Green
+    }
 
     # Install the 7 command skills into .agents/skills/
     $commandsSource = Join-Path $sourceDir "commands"
@@ -170,14 +238,12 @@ try {
 
     # Install engine runtime assets into .agents/skills/r2/
     $engineSource = Join-Path $sourceDir "engine"
-    $r2TargetDir = Join-Path $skillsDir "r2"
     if (Test-Path $engineSource) {
         Copy-Item -Path (Join-Path $engineSource "*") -Destination $r2TargetDir -Recurse -Force
-        Write-Host "  -> Installed R2 engine runtime (references, registry, rules engine, scripts)." -ForegroundColor Cyan
+        Write-Host "  -> Installed R2 engine runtime & synced reference prompts (claude-fable-5.2.md, claude-opus-5.5.md, registry, rules, scripts)." -ForegroundColor Cyan
     }
 
     # Cache specialists so /r2:init can deploy offline or on-demand
-    $specialistsSource = Join-Path $sourceDir "specialists"
     if (Test-Path $specialistsSource) {
         $cacheDir = Join-Path $r2TargetDir "specialists_cache"
         Copy-Item -Path $specialistsSource -Destination $cacheDir -Recurse -Force
@@ -186,8 +252,11 @@ try {
         # If -AllSpecialists requested, populate .agents/skills/r2/skills/ immediately
         if ($AllSpecialists) {
             $specialistDest = Join-Path $r2TargetDir "skills"
+            if (-not (Test-Path $specialistDest)) {
+                New-Item -ItemType Directory -Path $specialistDest -Force | Out-Null
+            }
             Copy-Item -Path (Join-Path $specialistsSource "*") -Destination $specialistDest -Recurse -Force
-            Write-Host "  -> Installed all 45 specialist skills into $specialistDest" -ForegroundColor Green
+            Write-Host "  -> Installed all $($validSpecialists.Count) specialist skills into $specialistDest" -ForegroundColor Green
         }
     }
 

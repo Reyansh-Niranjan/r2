@@ -14,6 +14,11 @@ The dedicated creative motion engineering pipeline of the R2 system. Produces fl
 At the beginning of every `/r2:motion` turn, **you MUST explicitly load**:
 1. [.agents/skills/r2/references/claude-fable-5.2.md](.agents/skills/r2/references/claude-fable-5.2.md)
 2. [.agents/skills/r2/references/claude-opus-5.5.md](.agents/skills/r2/references/claude-opus-5.5.md)
+
+> [!IMPORTANT]
+> **Full Reference & Specialist Skill-Reading Rule:**
+> You MUST read both reference files (`claude-fable-5.2.md` and `claude-opus-5.5.md`) **in full (all lines, not just the first 70 lines)** at startup to load their complete reasoning, coding, verification, and anti-hallucination disciplines.
+> Furthermore, before executing or implementing any task, look up the active command's mapped specialist skills in `.agents/skills/r2/registry/dependencies.json` / `skills.json` and read their respective `SKILL.md` files **in full** before executing.
 3. Design Reference Suite:
    - [.agents/skills/r2/references/claude-design/claude-design.md](.agents/skills/r2/references/claude-design/claude-design.md)
    - Skills & Starter Components in [.agents/skills/r2/references/claude-design/](.agents/skills/r2/references/claude-design/)
