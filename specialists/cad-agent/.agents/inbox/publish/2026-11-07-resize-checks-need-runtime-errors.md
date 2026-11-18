@@ -1,0 +1,233 @@
+# Resize checks need runtime errors from the page they resize
+
+On 2026-11-07 UTC, the actual v0.26.1 public consumer failed on WebKit while resizing `/docs/toolkit`: `ResizeObserver loop completed with undelivered notifications.` The actual document returned HTTP 200 at the expected revision `02cbc3c9cef53ef34a97fb24c14a133499af91ec`; the loaded navigation script matched released bytes. Request, HTTP and CSP errors were absent. Sixteen no-JavaScript cases and the Chromium navigation case completed; the second public domain and final checks were never reached. [Original failure](https://github.com/Valpatel/cad-agent/issues/450#issuecomment-6707822239).
+
+The existing `foldProblems` resize page and copy-layout sweep had no `pageerror` listener. Errors collected on other pages could not cover these separate browser contexts. Good geometry and a later quiet paint therefore could pass while the tested interaction emitted an error.
+
+## Evidence and limits
+
+- The first local diagnostic stopped before acquiring any browser: it incorrectly required `kit/copy.css`, although the real copy component embeds its stylesheet in `copy.js`. The failed preflight was retained and only the asset assumption was corrected.
+- One corrected local replay retained all 16 original/component-removal/observer-trace cases, two trials in each engine. Every action completed with zero runtime/request/HTTP errors. The source stayed clean and both owned browser processes and the preview process exited. Receipt SHA-256: `947a97cadfcc1fd7aacdf26b82146566802aa8812f9df883f2daa550262a18b7`.
+- That non-reproduction does not clear the actual public error. Component removal and instrumentation change timing. Observer traces point at the copy component and show synchronous changes to room styles and overflow attributes during delivery, but do not establish the historical warning's cause.
+
+## The existing copy consumer exposed the error
+
+The next finite diagnostic used the actual released copy-layout consumer, preserving its six mouse/touch widths, 41 planted boundary columns, copied labels, late button stylesheet and overlap checks. The page list was restricted to the saved actual toolkit document. Unfiltered runtime listeners were attached before navigation. The source and served static assets stayed bound to the released revision.
+
+On 2026-11-07 UTC, `timeout --signal=TERM --kill-after=15s 180s node cad450-copy-consumer-diagnostic.mjs` completed all twelve contexts. WebKit emitted the same error at both 768 px touch and 1366 px mouse, where the existing planted/late-style scenarios run. All geometry checks passed. Chromium's six contexts were quiet. The diagnostic exited zero because its purpose was to retain findings, not to declare product acceptance; its receipt contains those two errors. All owned processes exited and source readback stayed clean. Receipt SHA-256: `5b33db45f70d79a425b9f8c4e56f24e9c7c2bc13719af5acebb33f846e997ff2`.
+
+The copy component synchronously calls `fit()` during observer delivery; that operation can change the observed boxes through padding or the widest-label measurement. The correction coalesces only observer-triggered fitting onto the next animation frame. Initial, font-ready and pointer-mode measurements remain unchanged, as do the no-overlap and exact-copy contracts. Both existing consumer pages now collect unfiltered runtime errors and retain them with state and subsequent paint. The initial source checkpoint left paired validation and publication acceptance pending.
+
+This reproduces the error class in the existing copy consumer; it does not establish the exact timing of the earlier public navigation failure. The [Resize Observer draft's delivery algorithm](https://drafts.csswg.org/resize-observer/#deliver-resize-loop-error) reports an error when observations are skipped. No exception is added for it.
+
+## Preserve a partial pass and a separate unexplained failure
+
+A source-bound paired experiment at candidate `4df2d4c2fb1fba89979c2317a64f6bfd99398bc0` used the same refined consumer against released and corrected copy bytes. On WebKit, the consumer rejected both old late-stylesheet cases and passed all six corrected copy contexts plus the full navigation-fold consumer. This demonstrates the targeted component regression and the new error collector without weakening its existing geometry checks.
+
+The **whole paired experiment failed**, exit 1. Both Chromium variants stopped at the 768 px planted-block `page.evaluate` with `Execution context was destroyed, most likely because of a navigation.` Neither finished its remaining copy widths; both navigation-fold runs passed. The receipt preserves that partial result (SHA-256 `489e7ab0d969d80a7a77cede56cccac40c1501e65a6696ddc37c98a55b4c09d7`). Owned processes exited, source stayed clean, and the deadline did not fire. The Playwright message alone does not prove a navigation or an infrastructure cause.
+
+One separately reviewed, bounded Chromium-only diagnostic retained the same old/new 768 px copy actions and added navigation, console, crash, close, execution-context and evaluation-stage events. Both contexts completed with zero errors or geometry failures. Only initial document navigation/context replacement and deliberate close were observed; no events were dropped. Receipt SHA-256: `fc75fd2a716039392e46be1171bca96bc22267b8b2c3dc5a08c1267271f3a01c`. This is **non-reproduction**, with instrumentation and narrower scope; it does not repair or erase the failed broader run. Its original context-loss cause remains unknown.
+
+The actual full CI at `4df2d4c2` independently ran the unchanged all-page website consumer with the new listeners in both engines: [Chromium](https://github.com/Valpatel/cad-agent/actions/runs/42381035843/job/128428505135) and [WebKit](https://github.com/Valpatel/cad-agent/actions/runs/42381035843/job/128428504843) passed. The routes/copy, fold, geometry, rendered diagrams, readability and other existing checks completed. CI uses its pinned browser distribution; it is not a reproduction of every installed Chrome 151 local condition. Final-head CI and actual corrective publication remain separate requirements; any recurrence stays blocking.
+
+## Corrective rule
+
+Collect unfiltered runtime errors before navigation on the exact page that performs the interaction. Keep the original errors, observed state and subsequent screenshot separately; a later successful frame cannot erase an earlier error. Test real copy behavior and navigation actions without relaxing geometry or reader-choice requirements. A deterministic scheduling control may demonstrate and prevent a feedback hazard, but must not be described as reproducing an unexplained historical failure.
+
+## Boundaries
+
+Local checks are not publication acceptance. Keep issue450 and the release acceptance open until the correction passes independent review, normal CI and an actual reviewed public consumer. No error whitelist or unchanged public retry is a substitute.
+
+## Font readiness can change geometry during observer delivery
+
+On 2026-11-07 UTC, the corrected plain-state copy probe completed both Chromium cases in the actual v0.27.1
+public campaign, but the first domain's WebKit toolkit navigation emitted the same resize warning. The event
+at 17:43:58.489 UTC preceded the first viewport change at 17:43:59.470 UTC. The receipt remains failed after
+42 responses and 24 cases, with second-domain and later cases unrun; its SHA-256 is
+`506131e7bd6efbeab26b04c63ac897ec742a21e3cae56e6af3283374449d2740`.
+[Independent failure disposition](https://github.com/Valpatel/cad-agent/issues/450#issuecomment-6710850120).
+
+An eight-case local font-delay study and one instrumented public WebKit navigation were quiet. They did not
+reproduce the failure or justify a fix by themselves. Their receipts remain scoped nonreproductions:
+`551d4e62b8944847c37a5f61863f6d0c0ad146a28b4e24186f45ec8a325b40fd` and
+`598ecf4763054cb01c03f8b9d761fea0ddc251c58febfb011fba53c20cd30269`.
+
+The next controlled local experiment used the saved actual document and source-bound released assets. In each
+isolated page, it held the actual component's `FontFaceSet.ready` promise, applied the existing late-button
+stylesheet on an animation frame, and resolved readiness in the first actual copy observer notification afterward.
+The browser still delivered every original callback and error. The only scratch product alternative scheduled
+the font-ready measurement on an animation frame.
+
+`timeout --signal=TERM --kill-after=15s 180s node cad450-font-delivery-control.mjs` completed all four old/new
+WebKit/Chromium cases. Each observed 23 readiness reads and exactly one controlled release. Released WebKit
+emitted the exact warning through both `pageerror` and `window.error`. Released Chromium emitted it through
+`window.error` alone: Playwright's `pageerror` stayed empty. The scratch frame alternative emitted neither in
+both engines. All owned browser/preview processes exited, no traces were dropped, and source stayed clean.
+Receipt SHA-256: `d5975f3f8c901fd4df6c321f0ef37eb1481c65c0cfe6a791ee19b54f141feeae`.
+[Independent actual review](https://github.com/Valpatel/cad-agent/issues/450#issuecomment-6711195314).
+
+**Cause and corrective rule:** the remaining synchronous font-ready measurement can change observed geometry
+within the resize delivery cycle. Schedule it on the next frame, as the observer-triggered fit already is.
+Collect unfiltered window ErrorEvents as well as Playwright `pageerror` before navigation; drain each document's
+queue before replacing it and after a bounded paint. Do not prevent default error delivery. Prove the collector
+with a planted ErrorEvent, then test the actual component with the controlled readiness boundary and the existing
+overlap and reader-choice assertions.
+
+**Limits:** this establishes a scheduling hazard and a test-observation gap, not the cause of the uninstrumented
+public event. The diagnostic's Chromium `observedDiscrimination: false` field only considered its empty
+Playwright error list; its preserved window-event trace contains the warning. Source-bound regression checks,
+current CI and a new reviewed actual publication remain required. Neither the original failed receipt nor its
+outcome is rewritten.
+
+The committed consumer at `9b3da023975c4082b5a65df1dd2062c5b9684cf3` was then tested against both actual
+released copy bytes and corrected bytes, with the saved document and other released assets unchanged. One bounded
+local run of `cad465-committed-font-consumer.mjs` completed all four expected outcomes: the committed checker
+rejected the released component in both engines and passed the corrected component with no errors or overlap/
+navigation problems. WebKit reported the old warning through both channels; Chromium again reported it only
+through `window.error`. Each of four planted ErrorEvent controls passed, and four scratch variants that discarded
+the window-error queue correctly failed that control. All twelve isolated contexts and three owned processes
+closed; both source checkouts remained clean. Receipt SHA-256:
+`31a640c71e1dadf088e6ff926466b1f3360e5a516030103fad2af242feb4b008`.
+[Independent actual acceptance](https://github.com/Valpatel/cad-agent/pull/465#issuecomment-6711346118).
+
+The validator executes pinned browser-test function declarations and a pure DOM callback in the owned local
+browser, without running the suite's operational top level. An initial static objection was reconsidered after
+checking that these exact regions have no GitHub/Git mutation, subprocess or credential access. This does not
+relax the prohibition on extracting mutation-capable merge/deployment operators for review.
+[Exact bounded author-run clearance](https://github.com/Valpatel/cad-agent/pull/465#issuecomment-6711332641).
+This remains local regression evidence; full current CI and actual publication acceptance are separate.
+
+## Inspect the platform object, not an optional global constructor
+
+The full Chromium job at integrated source `164333d9dd611f4e95c9b89c0176ceace1b2c0ee` failed on
+2026-11-07 at 18:37:04 UTC. Its font-control initialization raised `FontFaceSet is not defined`, followed by
+the missing control state's `reads` error. Both the Playwright and window collectors retained the original
+ReferenceError. The local Chrome 151/WebKit checks did not expose this constructor-name difference.
+[Original failed job](https://github.com/Valpatel/cad-agent/actions/runs/42401796172/job/128490974880).
+
+The test had assumed a global constructor merely to find the `ready` getter, although the product only uses
+`document.fonts`. The correction walks the actual font object's prototype chain and still requires a configurable
+getter. Its isolated control deliberately removes the optional global name, preventing that assumption from
+returning. The actual font object, product component, readiness subscriptions, exact controlled release, geometry,
+error collection and fail-closed assertions remain required. This changes test portability, not product behavior.
+The failed run remains failed; current source validation and CI must pass before merging.
+
+At `91fc921bab93d3544598f7b530a77c166063d8b6`, the first portability validator completed the WebKit released
+rejection and corrected-component pass with the global name absent. Its old-constructor mutant also failed the
+actual consumer, but the validator incorrectly required `FontFaceSet` specifically in the window-event message.
+WebKit's `pageerror` named that missing variable; its window ErrorEvent contained only `Script error.` with empty
+filename and zero line/column. The run remains **failed**, receipt
+`e0b4fb5fd2c1995edbcc16709e901f9302fdd6be075312cd6d6be4ba21ced9fc`; Chrome was not reached. All nine
+contexts and two owned processes exited, and both source guards were clean. A generic window message alone
+does not identify its cause.
+
+A separately reviewed continuation rehashed the original script, receipt and raw runtime records. It accepted
+only that exact isolated mutant pairing, with ten altered signatures rejected, and ran only the three unexecuted
+Chromium variants. The actual consumer rejected released scheduling, passed the correction under the missing
+global, and rejected the old-constructor mutant. Planted ErrorEvent controls and blind-collector mutations also
+behaved as required. All nine new contexts and two owned processes exited; source stayed clean and the original
+failed receipt stayed byte-identical. Continuation SHA-256:
+`4dd356c42bec0ff4373223f3e6aa617693ec2c8ba5e477a000c090bcdd0296c0`.
+[Independent actual continuation acceptance](https://github.com/Valpatel/cad-agent/pull/465#issuecomment-6711580632).
+Use the actual platform object's contract and retain complementary error channels; do not infer that every browser
+exposes its constructor globally or preserves the same error message in every channel. No generic error exception
+was added to the product consumer, and this local acceptance does not replace current CI or publication evidence.
+
+
+## A navigation-looking error can be a collected probe promise
+
+**Observed, 2026-11-07 15:58 UTC:** The first actual v0.27.0 two-domain consumer stopped on the first domain's
+Chromium 768 px planted-copy case. Its source-bound document returned 200 at main
+`918405038071d65e524259c1458bb01c265be456`, and loaded copy/navigation bytes matched. All 41 planted blocks remained
+present. Page, HTTP, request and CSP errors were empty, but the interaction did not complete. The run was retained
+as failed after 28 readbacks and 12 cases; neither the second domain nor final revision checks was reached.
+
+Native protocol logging preserved the underlying error for the exact `Runtime.callFunctionOn` request containing
+the planted async probe and `awaitPromise: true`:
+
+```text
+2026-11-07T15:58:29.327Z  response id 738
+error code -32000: Promise was collected
+```
+
+The same protocol session had no navigation/context-destruction event around that response. Installed
+Playwright 1.56.1's `crExecutionContext.js` rewrites broad protocol errors into
+`Execution context was destroyed, most likely because of a navigation.` That wording was not the cause.
+The failed public receipt correctly marked the copy action incomplete even though cleanup observed the planted
+DOM. A preceding scratch consumer had incorrectly marked its copy row successful during cleanup; that bookkeeping
+was corrected without changing the overall failed outcome or original evidence.
+
+The correction keeps the exact async test probe rooted on its isolated page until the result is consumed, requires
+a completion sentinel, and removes the root afterward. Missing roots fail explicitly. Action and cleanup errors
+are retained together. No product copy component, 41-column boundary, copied label, late stylesheet or overlap
+assertion changes; no exception whitelist or automatic retry is introduced.
+
+One bounded source-bound local experiment used the saved actual public document and unchanged released assets.
+A direct CDP control collected an unrooted pending promise and returned the same underlying error. A rooted
+promise survived forced collection and returned its expected value. The actual corrected consumer passed both
+768 px touch and 1366 px mouse in Chromium and WebKit; Chromium forced collection between creating the probe
+root and consuming it. A separately planted missing root failed the actual consumer. Both released local variants
+also completed: that is nonreproduction, not proof that the old consumer cannot fail. All owned contexts/browser
+processes and preview exited; source stayed clean.
+
+Receipt SHA-256: `045e64b45ed98efe52e45dc3c5bee306186ba9501285b273561d851856ea595d`. [Independent source and actual-control review](https://github.com/Valpatel/cad-agent/pull/457#pullrequestreview-5813510723).
+
+**Corrective rule:** Preserve the underlying protocol error before inferring navigation from a wrapper's message.
+Give an asynchronous browser probe an explicit lifetime until its result is consumed, verify completion, and
+keep cleanup success separate from action success. Preserve failures from the original consumer. These controls
+establish this promise-lifetime hazard and the corrected consumer; they do not identify the cause of older
+uninstrumented failures or constitute a successful public run. Full current CI and new publication evidence remain
+separate requirements.
+
+
+## Observe asynchronous probe completion through plain state
+
+**Observed, 2026-11-07 17:15 UTC:** The first actual v0.27.1 public run failed at the same Chromium 768 px
+probe despite the page promise root. The document was HTTP 200 at main
+`c696d311a3ae6f648d4fbd660f9a824629af6374`; its 742,290 bytes hash to
+`06c100ce429333092358467a61959d21c8911e6af414e6f6eb047909b309fcdf`.
+Released copy/navigation bytes matched, 41 planted blocks remained, and page/request/external errors were empty.
+The whole run failed after 30 responses and 12 cases. WebKit, the second domain and final revision checks were
+not reached. The owned browser exited and source stayed clean. [Independent actual failure disposition](https://github.com/Valpatel/cad-agent/issues/450#issuecomment-6710551391).
+
+```text
+2026-11-07T17:15:22.844Z  id 738: page-root assignment returns undefined successfully
+2026-11-07T17:15:22.948Z  id 739: -32000 Promise was collected
+id 740: page-root deletion succeeds
+```
+
+The installed Playwright 1.56.1 utility's `_promiseAwareJsonValueNoThrow` creates a separate async serialization
+promise when the evaluated value is thenable. `CRExecutionContext.evaluateWithArguments` asks CDP to await that
+utility result. Keeping the page's input promise rooted therefore did not establish the lifetime of the value
+actually awaited by the protocol. The prior direct-CDP control and forced collection **before** the actual
+Playwright consume call did not exercise this boundary. Their local passes remain scoped evidence; the real
+public recurrence disproves their sufficiency.
+
+The follow-up starts the existing DOM probe once, retains its task and terminal value/error on the page, and
+observes only a synchronous plain-state projection through Playwright. A ten-second host deadline rejects late or incomplete
+observations; missing state, unknown state, a rejected task, a wrong completion value and expiry fail. Cleanup
+still runs and both action/cleanup errors are retained, now including their messages in the aggregate summary.
+The 41 columns, copied labels, late stylesheet, geometry and runtime assertions are unchanged. Product copy.js
+is unchanged.
+
+One reviewed saved-document experiment at `81f5f0f00950637786329581ffdd365c9c8a2c5f` completed on
+2026-11-07 UTC. The actual released consumer failed at Chromium 1366 px: protocol response id 214 at
+17:37:45.427 UTC returned `-32000 Promise was collected` while awaiting the rooted probe through the utility.
+Its 768 px case and both WebKit cases were quiet. A separate simplified actual Playwright pending-promise control
+also stayed quiet under forced collection; that control did **not** reproduce the failure.
+
+The candidate passed all four 768/1366 px Chromium/WebKit cases with unchanged released assets and geometry/runtime
+assertions. In Chromium, a temporary animation-frame gate held the real task in `running` state during forced
+collection, then released its callbacks. Four scratch mutations of the actual consumer independently rejected a
+missing root, asynchronous task error, non-completing task at the ten-second deadline and wrong completion value.
+All contexts and three owned processes exited, and source stayed clean. Receipt SHA-256:
+`4c42e79606812a5d4d273508b0659725667c3ee9137c1102f3ab5faaee4d2e78`.
+[Independent actual diagnostic review](https://github.com/Valpatel/cad-agent/pull/462#issuecomment-6710788556).
+This supplies local consumer and rejection evidence, not public delivery or proof that every other short asynchronous
+browser evaluation is immune. Current full CI and actual corrective publication remain required.
+
+**Corrective rule:** Test the actual browser-library evaluation boundary while it is pending. A lower-level API
+control or a collection event before the awaited wrapper exists cannot prove that wrapper survives collection.
+Prefer a plain observable completion record for a long asynchronous probe; reading that record must not rerun
+the action or hide a recorded error. Do not retry the failed public action unchanged, infer a navigation from the
+wrapper message, or retroactively classify older failures that lack native protocol evidence.

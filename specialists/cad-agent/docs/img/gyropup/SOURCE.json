@@ -1,0 +1,48 @@
+{
+ "project": "Valpatel/gyropup",
+ "license": "MIT",
+ "revision": "77f6d00bdb262f0f75a18fa0ddf0075058a649d8",
+ "regenerate": "python3 tools/gyropup_showcase.py --gyropup <checkout>",
+ "pictures": {
+  "wheel-link-fea": {
+   "source": "exports/leg/fea/wheel_link-E1.png",
+   "part": "wheel_link",
+   "case": "E1",
+   "safety_factor": 3.15,
+   "target": 2.0,
+   "ok": true,
+   "material": "PA6-CF along the layers (humid)",
+   "tets": 52134,
+   "element": "P2 tetrahedra",
+   "width": 526,
+   "height": 345
+  },
+  "leg-render": {
+   "source": "exports/leg/leg-stand-iso.png",
+   "width": 601,
+   "height": 861
+  }
+ },
+ "released_hardware_audit": {
+  "checked_utc": "2026-11-12",
+  "released_main": "41c5c266569d6141ecda28711188343b54ab43d8",
+  "released_hardware_tree": "346f5a5623560177390ad8cf207e5b8331ab5bae",
+  "packed_source_revision": "3a40891962b0b0a04625e070700f1d130bea3c7b",
+  "packed_hardware_tree": "346f5a5623560177390ad8cf207e5b8331ab5bae",
+  "method": "Direct Git tree equality from released main, independently checked by the coordinator. No recollection and no printed-leg change.",
+  "limits": "Hardware tree identity only. Historical FEA pictures retain their original source revision and assumptions."
+ },
+ "banner": {
+  "file": "docs/img/gyropup.jpg",
+  "made": "node tools/site/figures/site-model-poster.mjs: the model's poster on a dark card with the project's words",
+  "model": "web/models/gyropup.json",
+  "revision": "3a40891962b0b0a04625e070700f1d130bea3c7b",
+  "width": 1600,
+  "height": 733,
+  "model_sha256": "8ad815c1c821145d092592414334b9df3a3ec5e67532cbf78fdf68e9e376277f",
+  "binary_sha256": "4d244cb77ee7b6ed5d9749dfe32c8a45182c335459c787dca667652e8acfa5e4",
+  "poster": "tools/site/assets/models/gyropup.webp",
+  "poster_sha256": "9317c738f6a7919c3acca5dae2321e71461b86713f7169fc6fe7973a384c2829",
+  "sha256": "5056eceda2e9d75c8840ded65c158fe93ad943d9863d18a5540e4cacf7419350"
+ }
+}

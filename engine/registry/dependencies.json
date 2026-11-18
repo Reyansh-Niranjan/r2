@@ -1,6 +1,6 @@
 {
-  "version": "2.0.0",
-  "total_specialist_skills": 59,
+  "version": "2.2.0",
+  "total_specialist_skills": 45,
   "orchestrators": {
     "r2": {
       "command": "/r2",
@@ -13,7 +13,8 @@
         "/r2:code",
         "/r2:motion",
         "/r2:web",
-        "/r2:debug"
+        "/r2:debug",
+        "/r2:3d"
       ]
     },
     "r2:init": {
@@ -43,8 +44,7 @@
       ],
       "optional_skills": [
         "impeccable",
-        "setup-matt-pocock-skills",
-        "novaslate-setup-matt-pocock-skills"
+        "setup-matt-pocock-skills"
       ],
       "persisted_state": ".agents/skills/r2/registry/project-profile.json"
     },
@@ -94,15 +94,11 @@
         "codebase-design",
         "domain-modeling",
         "improve-codebase-architecture",
-        "arena",
-        "novaslate-ponytail",
-        "novaslate-ponytail-debt",
-        "novaslate-karpathy-guidelines",
-        "novaslate-codebase-design",
-        "novaslate-domain-modeling",
-        "novaslate-improve-codebase-architecture"
+        "arena"
       ],
-      "novaslate_specialist_routes": {
+      "max_review_rounds": 3,
+      "review_rule_file": ".r2/REVIEW.md",
+      "specialist_routes": {
         "overengineering_audit": "ponytail-audit",
         "code_deletion_review": "ponytail-review",
         "impact_scoreboard": "ponytail-gain",
@@ -152,22 +148,17 @@
         "emil-design-eng",
         "design-taste-frontend",
         "minimalist-ui",
-        "video-analyzer",
-        "novaslate-animate",
-        "novaslate-animation-vocabulary",
-        "novaslate-find-animation-opportunities",
-        "novaslate-review-animations",
-        "novaslate-emil-design-eng",
-        "novaslate-design-taste-frontend",
-        "novaslate-minimalist-ui"
+        "video-analyzer"
       ],
-      "novaslate_specialist_routes": {
-        "video_audit": "video-analyzer",
-        "frame_analysis": "video-analyzer"
-      },
       "external_apis": {
         "audio_sfx": "https://api.openverse.org/v1/audio/",
         "pattern": "Prompt Motion (<inputs> + <direction>)"
+      },
+      "max_review_rounds": 3,
+      "review_rule_file": ".r2/REVIEW.md",
+      "specialist_routes": {
+        "video_audit": "video-analyzer",
+        "frame_analysis": "video-analyzer"
       }
     },
     "r2:web": {
@@ -221,15 +212,10 @@
         "animate",
         "apple-design",
         "emil-design-eng",
-        "humanizer",
-        "novaslate-design-taste-frontend",
-        "novaslate-minimalist-ui",
-        "novaslate-mobile-native",
-        "novaslate-shieldcn-badges",
-        "novaslate-slopmonster",
-        "novaslate-animate",
-        "novaslate-emil-design-eng"
-      ]
+        "humanizer"
+      ],
+      "max_review_rounds": 3,
+      "review_rule_file": ".r2/REVIEW.md"
     },
     "r2:debug": {
       "command": "/r2:debug",
@@ -249,7 +235,6 @@
         "graphify"
       ],
       "optional_skills": [
-        "novaslate-diagnosing-bugs",
         "arena",
         "ponytail-audit",
         "ponytail-review",
@@ -260,7 +245,12 @@
         "impeccable",
         "apple-design",
         "humanizer",
-        "grim-prompter"
+        "grim-prompter",
+        "cad-agent",
+        "cadquery-modeling",
+        "cad-skill",
+        "3d-print-skill",
+        "three-d-printer"
       ],
       "routing_rules": {
         "logic_or_backend": {
@@ -304,8 +294,7 @@
             "impeccable",
             "apple-design",
             "humanizer",
-            "slopmonster",
-            "novaslate-slopmonster"
+            "slopmonster"
           ]
         },
         "security_or_prelaunch": {
@@ -317,8 +306,67 @@
           "skills": [
             "arena"
           ]
+        },
+        "cad_geometry_or_tolerances": {
+          "orchestrators": [
+            "r2:3d"
+          ],
+          "skills": [
+            "cad-agent",
+            "cadquery-modeling",
+            "cad-skill",
+            "3d-print-skill",
+            "three-d-printer"
+          ]
         }
-      }
+      },
+      "review_rule_file": ".r2/REVIEW.md"
+    },
+    "r2:3d": {
+      "command": "/r2:3d",
+      "name": "r2:3d",
+      "type": "cad_orchestration",
+      "loads_reference_prompts": true,
+      "reference_prompts": [
+        ".agents/skills/r2/references/claude-fable-5.2.md",
+        ".agents/skills/r2/references/claude-opus-5.5.md"
+      ],
+      "project_constraints": [
+        ".r2/hardware-profile.json",
+        ".r2/project-profile.json",
+        ".r2/rules.md",
+        ".r2/REVIEW.md"
+      ],
+      "pipeline": [
+        "check_project_constraints",
+        "check_review_rules",
+        "cad_geometry_and_tolerances",
+        "printability_and_overhang_checks",
+        "cad_export_verification",
+        "capped_review_loop"
+      ],
+      "cad_geometry_skills": [
+        "cad-agent",
+        "cadquery-modeling",
+        "cad-skill"
+      ],
+      "printability_verification_skills": [
+        "3d-print-skill",
+        "three-d-printer"
+      ],
+      "required_skills": [
+        "cad-agent",
+        "cadquery-modeling",
+        "cad-skill",
+        "3d-print-skill",
+        "three-d-printer"
+      ],
+      "optional_skills": [
+        "karpathy-guidelines",
+        "context7"
+      ],
+      "max_review_rounds": 3,
+      "review_rule_file": ".r2/REVIEW.md"
     }
   },
   "inter_skill_dependencies": {
@@ -342,16 +390,8 @@
       "depends_on": "ponytail",
       "type": "optional"
     },
-    "novaslate-ponytail-debt": {
-      "depends_on": "novaslate-ponytail",
-      "type": "required"
-    },
     "review-animations": {
       "depends_on": "animate",
-      "type": "optional"
-    },
-    "novaslate-review-animations": {
-      "depends_on": "novaslate-animate",
       "type": "optional"
     }
   },

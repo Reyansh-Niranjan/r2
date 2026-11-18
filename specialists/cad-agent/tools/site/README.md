@@ -1,0 +1,78 @@
+# Site tooling
+
+Build the website from committed sources; keep actual source paths separate from public page and asset addresses.
+
+Guides and skills form the editorial catalogue. The repository map opens the remaining owned folder READMEs as
+detail pages under `/repo/folders/`, with parent links and rendered diagrams; these do not add homepage chips,
+catalogue cards or entries to the full agent prompt. `version.json` reports editorial `pages` and `folder_maps`
+separately. The dependency-free selector shares the ownership policy with the repo-map check; CI still validates
+every authored map and exercises the actual rendered HTML and Markdown destinations.
+
+`/toolkit` presents native viewer and simulation capabilities. Its SCADA sections derive equipment, state controls,
+SVG previews and simulation launches from the owned libraries' metadata; `/toolkit/scada/catalog.json` is a browser
+projection, while `/catalog.json` retains the shared discovery identities. The command/Python manual stays at
+`/docs/toolkit`. Package licence overrides in `docs/catalog.yaml` also apply to indexed guides and skills.
+
+Publication and compilers
+
+```mermaid
+flowchart TD
+    S["publication.mjs + source aliases"]
+    B["build-site.mjs"]
+    C["compiler/<br/>compilers"]
+    D["../../dist/<br/>public pages + agent indexes"]
+    S --> B
+    C --> B
+    B --> D
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+    class S,B here
+```
+
+Versioned assets and generated figures
+
+```mermaid
+flowchart TD
+    D["../../dist/<br/>public pages + agent indexes"]
+    A["assets/<br/>versioned files"]
+    F["figures/<br/>stills + pictures"]
+    I["../../docs/img/"]
+    A --> D
+    F --> I
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+```
+
+| Owner | Purpose |
+|---|---|
+| [build-site.mjs](build-site.mjs) | Build HTML, Markdown twins, catalogue, references and agent indexes |
+| [pages-build.mjs](pages-build.mjs) | Fetch required public history and enforce release-build validation |
+| [preview-site.mjs](preview-site.mjs) | Serve the result with Pages-style routes and headers |
+| [publication.mjs](publication.mjs), [page-sources.json](page-sources.json) | Dependency-free source selection and stable public page identity |
+| [compiler/](compiler/README.md) | Compilers, rendering helpers and permanent redirect data |
+| [figures/](figures/README.md) | Explorer stills and existing-viewer picture scripts |
+| [assets/](assets/README.md) | Files emitted at /web/ and the existing installer URLs |
+| package.json, package-lock.json, wrangler.toml | npm ownership, pinned dependencies and root-dist deployment configuration |
+
+From the repository root:
+
+```sh
+npm --prefix tools/site ci
+npm --prefix tools/site run build:site
+npm --prefix tools/site run preview:site
+```
+
+The default result remains the repository's dist/ folder. Release builds still require a clean reviewed commit and
+full history. The Pages settings transition is tracked and reviewed separately in
+[#362](https://github.com/Valpatel/cad-agent/issues/362); moving these files does not change a live setting.
+
+Local `--worktree` drafts include staged additions and read tracked files on disk. Ordinary and release builds
+select and read only committed files; untracked work never enters either output.
+
+[Tools](../README.md) · [Site tests](../../tests/site/README.md)
+
+| File | Purpose |
+|---|---|
+| [package.json](package.json) | Existing Node scripts and pinned site dependencies. |
+| [package-lock.json](package-lock.json) | Resolved site dependency integrity. |
+| [wrangler.toml](wrangler.toml) | Existing Pages deployment identity; no settings change here. |

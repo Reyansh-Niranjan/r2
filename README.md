@@ -1,6 +1,6 @@
 # R2 Skill Orchestration System
 
-**R2** is a modular, high-performance skill orchestration architecture built for **Google Antigravity** and **Gemini**. It separates meta-orchestration from specialist implementation, coordinating complex software engineering, 120fps GPU motion design, award-winning frontend experiences, and systematic causal debugging through a clean command hierarchy.
+**R2** is a modular, high-performance skill orchestration architecture built for **Google Antigravity** and **Gemini**. It separates meta-orchestration from specialist implementation, coordinating complex software engineering, 120fps GPU motion design, award-winning frontend experiences, systematic causal debugging, and parametric CadQuery 3D printing through a clean command hierarchy.
 
 ---
 
@@ -32,7 +32,7 @@ Once installed, switch to Google Antigravity or Gemini chat and run:
 
 ## 🏛️ Architecture Overview
 
-R2 separates responsibilities into **6 Command Orchestrators**, a **Master Specialist Collection** (59 skills), and a **Private On-Demand Rules Provider (ECC)**.
+R2 separates responsibilities into **7 Command Orchestrators**, a **Master Specialist Collection** (45 skills), and a **Private On-Demand Rules Provider (ECC)**.
 
 ```text
 Target Project/
@@ -41,7 +41,7 @@ Target Project/
 │       ├── r2/                     # /r2 (Informational index & discovery hub)
 │       │   ├── SKILL.md
 │       │   ├── references/         # Fable 5.2, Opus 5.5, Claude Design suites
-│       │   ├── registry/           # Master catalog & dependency graph
+│       │   ├── registry/           # Master catalog (45 skills) & dependency graph
 │       │   ├── rules/              # Private rules engine (ECC provider)
 │       │   │   ├── RULE_PROTOCOL.md
 │       │   │   ├── manifest.json
@@ -52,14 +52,18 @@ Target Project/
 │       ├── r2-code/                # /r2:code (Engineering orchestrator)
 │       ├── r2-debug/               # /r2:debug (Systematic triage & causal tracing)
 │       ├── r2-web/                 # /r2:web (Anti-slop creative frontend design)
-│       └── r2-motion/              # /r2:motion (120fps motion & spring physics)
+│       ├── r2-motion/              # /r2:motion (120fps motion & spring physics)
+│       └── r2-3d/                  # /r2:3d (Parametric CadQuery & 3D printing DfM)
 ├── .r2/                            # Project-Specific Configuration (GIT-TRACKED)
 │   ├── config.json                 # Installation metadata & version tracking
-│   └── project-profile.json        # Project profile locked via /grill-me
+│   ├── project-profile.json        # Project profile locked via /grill-me
+│   ├── rules.md                    # Project-specific architectural invariants & overrides
+│   ├── REVIEW.md                   # Continuous bug-prevention rules from /r2:debug
+│   └── hardware-profile.json       # Printer bed volume & nozzle constraints for /r2:3d
 └── .gitignore                      # Includes .agents/skills/ (MUST NOT include .r2/)
 ```
 
-### The Six Command Orchestrators
+### The Seven Command Orchestrators
 
 | Command | Physical Path | Primary Role | Reference Injections |
 | :--- | :--- | :--- | :--- |
@@ -69,6 +73,18 @@ Target Project/
 | `/r2:motion` | `.agents/skills/r2-motion/SKILL.md` | 120fps motion design, spring physics, video pipelines | Fable 5.2, Opus 5.5, Claude Design |
 | `/r2:web` | `.agents/skills/r2-web/SKILL.md` | Anti-slop creative web design, Awwwards bar, Playwright/axe QA | Fable 5.2, Opus 5.5 |
 | `/r2:debug` | `.agents/skills/r2-debug/SKILL.md` | Triage, root-cause path tracing, conditional domain routing | Fable 5.2, Opus 5.5 |
+| `/r2:3d` | `.agents/skills/r2-3d/SKILL.md` | Parametric CadQuery solid modeling, Slant 3D DfM, 3D printing verification | Fable 5.2, Opus 5.5 |
+
+---
+
+## 🛑 Orchestration Guardrails
+
+1. **3-Round Maximum Review Cap:**
+   All execution pipelines (`/r2:code`, `/r2:web`, `/r2:motion`, `/r2:3d`) strictly cap the iteration loop between the Builder and Critique/Reviewer at **3 rounds**. If consensus, passing scores, or resolution cannot be achieved after Round 3, execution halts immediately and documents unresolved trade-offs directly to the user.
+2. **Continuous Rule Memory (`.r2/REVIEW.md`):**
+   Whenever `/r2:debug` diagnoses and resolves a defect, it appends a concise 1-line rule to `.r2/REVIEW.md`. All future runs of `/r2:code`, `/r2:web`, `/r2:motion`, and `/r2:3d` check `.r2/REVIEW.md` at startup, guaranteeing zero regression.
+3. **Strict `.r2/` Project State Isolation:**
+   Project-specific rules, hardware configurations, and requirement locks reside strictly inside `.r2/` (`.r2/project-profile.json`, `.r2/rules.md`, `.r2/hardware-profile.json`). Specialists are **never duplicated** into global `specialists/`.
 
 ---
 
@@ -91,13 +107,13 @@ If any check fails, the installer aborts immediately without modifying any files
 - Authenticates access to the private repository.
 - Safely updates the project's `.gitignore` to ignore `.agents/skills/`.
 - Verifies that `.r2/` is NOT ignored, ensuring configuration is shareable with collaborators.
-- Deploys the 6 command skills and engine runtime assets into `.agents/skills/`.
+- Deploys the 7 command skills and engine runtime assets into `.agents/skills/`.
 - Creates `.r2/config.json`.
 
 ### Phase 2: First-Time Project Setup (`/r2:init`)
 - Invoked inside Google Antigravity or Gemini chat.
-- Inspects project dependencies (`package.json`, `tsconfig.json`, `pyproject.toml`, etc.).
-- Installs the project-relevant specialist skills into `.agents/skills/r2/skills/`.
+- Inspects project dependencies (`package.json`, `tsconfig.json`, `pyproject.toml`, CAD files, etc.).
+- Installs the project-relevant specialist skills from the 45-skill catalog into `.agents/skills/r2/skills/`.
 - Initializes ECC rules: downloads `common/` and detected technology packs from upstream `affaan-m/ECC` at pinned commit `d2ef2680594f9a17526a6e1a2e18b3d242c5d17b`.
 - Verifies all downloaded rules byte-for-byte using SHA-256 hashes against `manifest.json`.
 - Runs Socratic requirements alignment via `/grill-me` (caching answers in `.r2/project-profile.json`).
@@ -113,7 +129,7 @@ If any check fails, the installer aborts immediately without modifying any files
   1. System & Developer Instructions
   2. User Instructions
   3. Existing R2 Safety & Architectural Constraints
-  4. Project-Specific Instructions & Configuration (`AGENTS.md`, `package.json`, etc.)
+  4. Project-Specific Instructions & Configuration (`AGENTS.md`, `package.json`, `.r2/rules.md`, `.r2/REVIEW.md`)
   5. Applicable ECC Rules (`.agents/skills/r2/rules/ecc/`)
   6. Individual Specialist Guidance
 - **On-Demand Acquisition:** Orchestrators dynamically fetch rules for newly encountered stacks:

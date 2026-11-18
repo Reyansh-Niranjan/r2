@@ -1,0 +1,44 @@
+name: Release
+# After a release PR merges into main: tag vX.Y.Z with a GitHub release from CHANGELOG.md.
+# The site is not deployed from here. Its Cloudflare Pages project `cad-agent` is connected to this repository and
+# builds and publishes cad-agent.valpatel.com and cad-agent.gyropup.com on every push to main
+# (`npm ci && npm run build`, output `dist`).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.ref == 'refs/heads/main'          # workflow_dispatch can name any branch; only main is released
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}   # the release is made through the API (gh), not git push
+      - id: v
+        run: echo "version=$(python3 tools/ci_gates.py version)" >> "$GITHUB_OUTPUT"
+      - name: Tag and release (once per version)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then echo "v$V already tagged"; exit 0; fi
+          python3 - "$V" > notes.md <<'PY'
+          import re, sys
+          v = sys.argv[1]
+          log = open("CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(rf"^## v{re.escape(v)} \(.*?\)\s*$(.*?)(?=^## |\Z)", log, re.M | re.S)
+          print(m.group(1).strip() if m else f"Release v{v}. See CHANGELOG.md.")
+          PY
+          gh release create "v$V" --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md

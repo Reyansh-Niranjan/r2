@@ -1,0 +1,73 @@
+# tests/fixtures
+
+Data the tests read, shared by every folder under [`tests/`](../README.md). Each set is written by a script beside it
+or by hand, and never fetched at test time. A test reaches this folder as
+`Path(__file__).resolve().parents[1] / "fixtures"`.
+
+Arrows: who writes a set and which tests read it.
+
+Seeded gate defects
+
+```mermaid
+flowchart TD
+    B["gate_bench/build.py<br/>a mechanism, seeded defects"]
+    R["review/ · publish/<br/>the gates, the review site"]
+    B --> R
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+    class B here
+    class R near
+```
+
+Recorded simulation runs
+
+```mermaid
+flowchart TD
+    C["cfd_runs/build.py<br/>recorded OpenFOAM runs"]
+    S["simulation/<br/>convergence tests"]
+    C --> S
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+    class C here
+    class S near
+```
+
+Cross-language formula vectors
+
+```mermaid
+flowchart TD
+    V["formula-vectors.json<br/>tools/formula_vectors.py"]
+    W["formulas/ · webkit/ · site/<br/>Python and its JS port"]
+    V --> W
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+    class V here
+    class W near
+```
+
+| File or folder | What it is |
+|---|---|
+| [assembly-plan/](assembly-plan/README.md) | Native serial rail bench shared by geometry checks and both viewer consumers |
+| `site-page-identities.json` | Public page IDs, kinds and URLs from the actual fleet 171 build at `e4556ea0`; a compatibility baseline for physical source moves, not generated from the new mapping |
+| `bambu_templates/` | A reduced Bambu Studio P1S profile graph, for `manufacturing/test_slicer.py` ([README](bambu_templates/README.md)) |
+| `cards/` | Golden `cad-agent rules` and `choose` output for `manufacturing/test_cards.py`; rewrite with `CADAGENT_UPDATE_GOLDEN=1` and read the diff |
+| `cfd_runs/` | Recorded-format CFD runs, synthetic numbers in OpenFOAM's layout; rebuild with `python tests/fixtures/cfd_runs/build.py` |
+| `file-viewer/` | A generated STEP block for the original-file viewer suites ([README](file-viewer/README.md)) |
+| `formula-vectors.json` | Golden vectors from `cadagent.formulas`, which the browser port must match; written by `tools/formula_vectors.py` |
+| `gate_bench/` | The gate bench: a small generic mechanism through the dossier registry, its seeded defects, and the review site's snapshot |
+| `mcmaster/` | Hand-written McMaster-Carr pages, so the tests never fetch the site ([README](mcmaster/README.md)) |
+| `model/` | The packed two-part model both model decoders are held to; rebuild with `make_fixture.py` |
+
+Related: [tests](../README.md) · [where files go](../../.github/CONTRIBUTING.md#where-files-go)
+
+## File and child ownership
+
+| File or folder | Purpose |
+|---|---|
+| [bearing-vectors.json](bearing-vectors.json) | Golden Python/JavaScript bearing parity vectors. |
+| [gcode/](gcode/) | Recorded G-code examples for parsing controls. |
+| [prusa_config/](prusa_config/) | Synthetic/recorded Prusa configuration fixtures. |
+| [prusa_logs/](prusa_logs/) | Recorded-format Prusa log fixtures. |
+| [assembly-guide/](assembly-guide/README.md) | Real cross-chapter guide and model-manifest contract from the pinned Gyropup pilot |
+| [evaluation/](evaluation/README.md) | Versioned analytical jobs and controller-only passing controls. |
+| [scada/](scada/README.md) | Frozen original SCADA scenario checkpoints and provenance. |

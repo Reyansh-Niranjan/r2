@@ -154,7 +154,7 @@ try {
     # ---------------------------------------------------------------------------
     Write-Host "`n[4/5] Installing R2 command skills and engine runtime..." -ForegroundColor Yellow
 
-    # Install the 6 command skills into .agents/skills/
+    # Install the 7 command skills into .agents/skills/
     $commandsSource = Join-Path $sourceDir "commands"
     if (Test-Path $commandsSource) {
         Get-ChildItem -Path $commandsSource -Directory | ForEach-Object {
@@ -187,12 +187,12 @@ try {
         if ($AllSpecialists) {
             $specialistDest = Join-Path $r2TargetDir "skills"
             Copy-Item -Path (Join-Path $specialistsSource "*") -Destination $specialistDest -Recurse -Force
-            Write-Host "  -> Installed all 59 specialist skills into $specialistDest" -ForegroundColor Green
+            Write-Host "  -> Installed all 45 specialist skills into $specialistDest" -ForegroundColor Green
         }
     }
 
     # Update .r2/config.json
-    $version = "2.1.0"
+    $version = "2.2.0"
     $versionFile = Join-Path $sourceDir "VERSION"
     if (Test-Path $versionFile) {
         $version = (Get-Content $versionFile -Raw).Trim()
@@ -204,7 +204,7 @@ try {
         "repository" = $REPO
         "installed_at" = if ($existingConfig.ContainsKey("installed_at")) { $existingConfig["installed_at"] } else { $now }
         "updated_at" = $now
-        "commands" = @("r2", "r2-init", "r2-code", "r2-debug", "r2-web", "r2-motion")
+        "commands" = @("r2", "r2-init", "r2-code", "r2-debug", "r2-web", "r2-motion", "r2-3d")
         "specialists_mode" = if ($AllSpecialists) { "all" } else { "on_demand" }
         "status" = "ready"
     }
@@ -230,6 +230,7 @@ Write-Host "  - /r2:code    : Full-stack engineering & Karpathy constraints"
 Write-Host "  - /r2:debug   : Precision triage & causal graph tracing"
 Write-Host "  - /r2:web     : Anti-slop creative web frontend design"
 Write-Host "  - /r2:motion  : 120fps GPU animations & spring physics"
+Write-Host "  - /r2:3d      : Parametric CadQuery solid modeling & 3D printing DfM"
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "`nNEXT STEPS:" -ForegroundColor Yellow
 Write-Host "1. In Google Antigravity / Gemini chat, run:" -ForegroundColor White

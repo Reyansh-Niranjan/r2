@@ -1,0 +1,407 @@
+// The reference knowledge base on the site (#323 phase 3; tools/site/compiler/site-references.mjs). Checks:
+// - the loader against the registry's own rules;
+// - the built pages, JSON, llms.txt and Markdown twins against the committed records;
+// - [ref:<id>] links;
+// - that no record becomes a catalogue entry or reaches llms-full.txt;
+// - docs/practice/experts.md is the generator's output.
+// The pages in a real browser (filters, both themes, walls of text): tests/site/website-browser.mjs.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { readFile, readdir } from 'node:fs/promises';
+import path from 'node:path';
+import { YAML } from './npm-context.mjs';
+import { builtSite } from './built-site.mjs';
+import {
+  creatorText, originalUrl, CORE, DIR, EXPERTS, LADDER, NOT_SHARDS, UNPLACED, areaOf, isRead, areaTree, barChart, expertsMarkdown, linkTags, loadReferences, mdTags, referenceModel,
+  referenceJson, referenceSite, healthOf,
+} from '../../tools/site/compiler/site-references.mjs';
+
+const root = path.resolve(import.meta.dirname, '../..');
+const ORIGIN = 'https://cad-agent.valpatel.com';
+const git = (...a) => execFileSync('git', a, { cwd: root, maxBuffer: 1 << 28 }).toString();
+const tracked = git('ls-tree', '-r', '-z', '--name-only', 'HEAD').split('\0').filter(Boolean);
+const show = async f => git('show', `HEAD:${f}`);
+const refs = await loadReferences({ files: tracked, read: show });
+const model = referenceModel(refs, YAML.parse(await show('docs/areas.yaml')));
+const site = await builtSite('cad-agent-references-');
+const out = site.dir;
+test.after(() => site.done());
+const files = (await readdir(out, { recursive: true, withFileTypes: true })).filter(e => e.isFile())
+  .map(e => path.relative(out, path.join(e.parentPath, e.name)).split(path.sep).join('/'));
+const json = async f => JSON.parse(await readFile(path.join(out, f), 'utf8'));
+const text = f => readFile(path.join(out, f), 'utf8');
+// Records placed in no docs/areas.yaml area: this number may only fall (place them, do not add more).
+const UNPLACED_MAX = 71;
+
+// ----------------------------------------------------------------------------- the loader
+
+/** A registry from a dictionary of files, for the loader's own rules. */
+const fake = fs => loadReferences({ files: Object.keys(fs), read: async f => fs[f] });
+const core = `schema: 1\nsources:\n  - {id: a-guide, title: A, org: A Co, areas: [fdm], used_for: [docs/x.md], verified: 2026-01-01 read}\nunverified:\n  - {id: b-later, title: B}\n`;
+
+test('a shard extends a read source by the registry\'s rule: lists united, the core keeps its own values', async () => {
+  const r = await fake({ [CORE]: core, [`${DIR}guides-x.yaml`]: 'schema: 2\nsources:\n  - {id: a-guide, extends: true, title: Changed, areas: [fdm, sheet-metal], evidence: {numbers: some}}\n' });
+  const a = r.records.get('a-guide');
+  assert.equal(a.title, 'A', 'a field both set keeps the core\'s value');
+  assert.deepEqual(a.areas, ['fdm', 'sheet-metal']);
+  assert.deepEqual(a.evidence, { numbers: 'some' }, 'a field the core lacks is added');
+  assert.equal(a.status, 'source');
+  assert.equal(r.others.get('b-later').status, 'unverified');
+});
+
+test('a shard record read at source is a source, and aliases of every entry resolve, as in the Python registry', async () => {
+  const r = await fake({ [CORE]: core.replace('unverified:\n  - {id: b-later, title: B}', 'unverified:\n  - {id: b-later, title: B, aliases: [b]}'),
+    [`${DIR}g.yaml`]: 'sources:\n  - {id: c-read, title: C, aliases: [c], evidence: {class: read}}\n  - {id: d-snip, title: D, evidence: {class: snippet-only}}\n  - {id: e-none, title: E, aliases: [a-guide]}\n' });
+  assert.equal(r.records.get('c-read').status, 'source');
+  assert.equal(r.records.get('d-snip').status, 'catalogued');
+  assert.equal(r.records.get('e-none').status, 'catalogued');
+  assert.equal(r.aliases.get('c'), 'c-read');
+  assert.equal(r.aliases.get('b'), 'b-later');
+  assert.equal(r.aliases.has('a-guide'), false, 'an alias never shadows an id');
+});
+
+test('the loader refuses an extension of nothing and a second record with one id', async () => {
+  await assert.rejects(fake({ [CORE]: core, [`${DIR}g.yaml`]: 'sources:\n  - {id: b-later, extends: true}\n' }), /extends no read source/);
+  await assert.rejects(fake({ [CORE]: core, [`${DIR}g.yaml`]: 'sources:\n  - {id: a-guide, title: Again}\n' }), /also in docs\/research\/references\.yaml/);
+  const r = await fake({ [CORE]: core, [`${DIR}vocab.yaml`]: 'kind: {}\n', [`${DIR}coverage.yaml`]: 'rows: []\n', [`${DIR}sub/x.yaml`]: 'sources: [{id: z}]\n' });
+  assert.deepEqual(r.shards, [], 'vocab, coverage and files in subfolders are not shards');
+});
+
+test('which files are shards, and which records are read, are the Python registry\'s rules', async () => {
+  // cadagent.review.references owns both; the site's copies are pinned to its source text.
+  const py = await readFile(path.join(root, 'software/cadagent/review/references.py'), 'utf8');
+  const name = k => py.match(new RegExp(`^${k} = "([^"]+)"`, 'm'))[1];
+  assert.deepEqual([...NOT_SHARDS].sort(), py.match(/^NOT_SHARDS = \(([^)]*)\)/m)[1].split(',').map(s => name(s.trim())).sort());
+  assert.deepEqual(LADDER, [...py.match(/^LADDER = \(([^)]*)\)/m)[1].matchAll(/"([^"]+)"/g)].map(m => m[1]));
+  assert.match(py, /return isinstance\(ev, dict\) and ev\.get\("class"\) in LADDER\[1:\]/);
+  for (const [r, read] of [[{ evidence: { class: 'read' } }, true], [{ evidence: { class: 'snippet-only' } }, false],
+    [{ evidence: { class: 'measured' } }, true], [{ evidence: {} }, false], [{}, false], [null, false]])
+    assert.equal(isRead(r), read, JSON.stringify(r));
+});
+
+test('areas place a record as cadagent.review.references area_of does', () => {
+  const tree = areaTree({ domains: [{ slug: 'd', title: 'D', areas: [{ slug: 'fasteners', title: 'F', topics: [{ slug: 'inserts' }] }] }] });
+  assert.equal(areaOf('fasteners', tree), 'fasteners');
+  assert.equal(areaOf('inserts', tree), 'fasteners');
+  assert.equal(areaOf('fasteners/inserts', tree), 'fasteners');
+  assert.equal(areaOf('other/inserts', tree), null);
+  assert.equal(areaOf('pricing', tree), null);
+  assert.equal(areaOf(7, tree), null);
+});
+
+// ----------------------------------------------------------------------------- what the site publishes
+
+test('index.json counts every committed record once, and each area file lists exactly its records', async () => {
+  // Counted from the YAML here, not through the module under test.
+  // A shard record read at source (#323's sweeps) is a source; one still snippet-only is catalogued.
+  const own = [], ownRead = [];
+  for (const f of tracked.filter(f => /^docs\/research\/references\/[^/]+\.yaml$/.test(f) && !NOT_SHARDS.has(path.basename(f))))
+    for (const r of YAML.parse(await show(f)).sources) {
+      if (r.extends) continue;
+      own.push(r.id);
+      if (isRead(r)) ownRead.push(r.id);
+    }
+  const sources = YAML.parse(await show(CORE)).sources.map(s => s.id);
+  const index = await json('catalog/references/index.json');
+  assert.equal(index.schema, 'cad-agent-references/1');
+  assert.equal(index.totals.records, own.length + sources.length);
+  assert.equal(index.totals.catalogued, own.length - ownRead.length);
+  assert.equal(index.totals.sources, sources.length + ownRead.length);
+  assert.deepEqual(Object.keys(index.totals.by_evidence), LADDER.filter(k => index.totals.by_evidence[k] !== undefined));
+  const seen = new Set();
+  for (const a of index.areas) {
+    const area = await json(`catalog/references/${a.slug}.json`);
+    assert.equal(area.records.length, a.records, a.slug);
+    assert.equal(area.count, a.records, a.slug);
+    for (const r of area.records) {
+      seen.add(r.id);
+      assert.ok(r.placed.includes(a.slug), `${r.id} is in ${a.slug}.json but not placed there`);
+      assert.equal(`/references/${r.placed[0]}#${r.id}`, model.home(r.id), `${r.id}: its row is in its first area`);
+      assert.ok(['source', 'catalogued'].includes(r.status), r.id);
+    }
+    assert.ok(files.includes(`references/${a.slug}.html`) && files.includes(`references/${a.slug}.md`), a.slug);
+  }
+  assert.deepEqual([...seen].sort(), [...own, ...sources].sort(), 'every record is in some area file, once per area');
+  // The whole base in one fetch for a mirror (records.json, linked from the index), and the index itself small.
+  assert.equal(index.records, `${ORIGIN}/catalog/references/records.json`);
+  assert.ok(JSON.stringify(index).length < 40_000, `index.json is ${JSON.stringify(index).length} bytes: an agent reads it first`);
+  const all = await json('catalog/references/records.json');
+  assert.equal(all.schema, 'cad-agent-references/1');
+  assert.equal(all.count, all.records.length);
+  assert.deepEqual(all.records.map(r => r.id), [...own, ...sources].sort((a, b) => (a < b ? -1 : 1)));
+  for (const r of all.records) {
+    for (const k of Object.keys(all.fields)) if (k !== 'url' || !r.isbn) assert.ok(k in r, `${r.id}: no ${k}`);
+    assert.ok(r.url === null || /^https?:\/\//.test(r.url), r.id);
+    assert.ok(LADDER.includes(r.evidence), `${r.id}: evidence ${r.evidence}`);
+    assert.equal(`/references/${r.areas[0]}#${r.id}`, model.home(r.id), 'the first area is where its row is');
+  }
+  assert.ok(index.totals.unplaced <= UNPLACED_MAX, `${index.totals.unplaced} records are not placed in an area (at most ${UNPLACED_MAX}): give them docs/areas.yaml slugs`);
+  if (index.totals.unplaced < UNPLACED_MAX) console.log(`  ${index.totals.unplaced} unplaced: lower UNPLACED_MAX to it`);
+  // A catalogued record is a snippet: its licence unread and nothing standing on it.
+  for (const a of index.areas) for (const r of (await json(`catalog/references/${a.slug}.json`)).records.filter(r => r.status === 'catalogued')) {
+    assert.equal(r.evidence_class, 'snippet-only', r.id);
+    assert.equal(r.licence.read, false, r.id);
+    assert.deepEqual(r.used_for, [], r.id);
+  }
+});
+
+test('each area page charts its records and lists one row per record, which [ref:] links reach', async () => {
+  for (const slug of model.pages) {
+    const html = await text(`references/${slug}.html`), list = model.byArea.get(slug) || [];
+    const rows = [...html.matchAll(/<tr id="([^"]+)" data-kind=/g)].map(m => m[1]);
+    assert.deepEqual(rows, list.map(r => r.id), slug);
+    if (list.length) {
+      assert.ok((html.match(/<figure class="refs-chart/g) || []).length >= 4, `${slug}: the charts`);
+      for (const k of ['evidence', 'confidence', 'kind', 'licence']) assert.match(html, new RegExp(`data-filter="${k}"`), `${slug}: ${k} chart`);
+      assert.match(html, /<form class="refs-filters" role="search" hidden>/, `${slug}: the filters wait for the script`);
+    }
+    for (const row of model.coverageIn.get(slug) || []) assert.ok(html.includes(row.topic.replace(/&/g, '&amp;').replace(/'/g, '&#39;')), `${slug}: ${row.topic}`);
+  }
+  // The drafts the map wrote were never posted, and the pages say so.
+  const drafted = model.rows.filter(r => r.draft_issue);
+  assert.ok(drafted.length >= 1);
+  for (const r of drafted) assert.match(await text(`references/${r.placed[0]}.html`), /Drafted issue, never posted/);
+});
+
+test('[ref:<id>] in a page links to the record and the source; code, links and unknown ids stay as written', async () => {
+  const id = 'pem-handbook', home = model.home(id);
+  assert.match(home, /^\/references\/[a-z0-9-]+#pem-handbook$/);
+  const html = linkTags(`<p>See [ref:${id}].</p><pre><code>[ref:${id}]</code></pre><a href="/x">[ref:${id}]</a><p>[ref:no-such-id] [ref:b c]</p>`, model);
+  assert.match(html, new RegExp(`<span class="ref-cite">\\[<a class="ref-key" href="${home}" title="[^"]+">${id}</a><a class="ref-out" href="https://`));
+  assert.ok(html.includes(`<code>[ref:${id}]</code>`) && html.includes(`<a href="/x">[ref:${id}]</a>`) && html.includes('[ref:no-such-id] [ref:b c]'));
+  const unread = [...refs.others.keys()][0];
+  assert.match(linkTags(`<p>[ref:${unread}]</p>`, model), /class="ref-cite ref-unread"/);
+  // In the site: a page that cites leaves no bare tag of a known record, and loads the style for its links.
+  const page = await text('research/sheet-metal-joining.html');
+  assert.match(page, /class="ref-cite"/);
+  assert.match(page, /<link rel="stylesheet" href="\/web\/references\.css">/);
+  const bare = [...page.replace(/<(code|pre)\b[\s\S]*?<\/\1>/g, '').matchAll(/\[ref:([a-z0-9-]+)\](?!<)/g)].map(m => m[1]).filter(k => model.home(k));
+  assert.deepEqual(bare, []);
+});
+
+test('the deeper PEM overview reading publishes one canonical source and resolves both newer names', async () => {
+  const canonical = 'pem-fastener-guide';
+  for (const alias of ['pem-design-engineers-fastener-guide-2022', 'pem-fastener-guide-2022']) {
+    assert.equal(refs.aliases.get(alias), canonical);
+    assert.equal(model.home(alias), model.home(canonical));
+    assert.equal(refs.records.has(alias), false, 'an alias is not another published document');
+  }
+  const area = await json('catalog/references/fasteners-and-hardware.json');
+  const matching = area.records.filter(r => r.url === refs.records.get(canonical).url);
+  assert.deepEqual(matching.map(r => r.id), [canonical]);
+  assert.match(matching[0].verified, /2026-11-01:.*skimmed/s);
+  assert.match(matching[0].verified, /2026-11-11:.*all 20 PDF pages/s);
+  const page = await text('research/manufacturing/pem-micro-fasteners.html');
+  assert.ok(page.includes(`href="${model.home(canonical)}"`), 'the actual guide citation targets the canonical row');
+  assert.ok(!page.includes('#pem-design-engineers-fastener-guide-2022"'));
+});
+
+test('Markdown twins link [ref:] tags to the records\' pages; code is left alone', () => {
+  const md = `A [ref:pem-handbook] rule.\n\n\`[ref:pem-handbook]\`\n\n\`\`\`\n[ref:pem-handbook]\n\`\`\`\n[ref:pem-handbook](kept)\n[see [ref:pem-handbook]](https://x) [[ref:pem-handbook]](https://y)\n`;
+  const page = model.home('pem-handbook').slice(1).split('#')[0];
+  const twin = mdTags(md, 'research/x.md', model, { ORIGIN });
+  assert.ok(twin.startsWith(`A [ref:pem-handbook](${path.posix.relative('research', page)}.md#pem-handbook) rule.`), twin);
+  assert.ok(twin.includes('`[ref:pem-handbook]`') && twin.includes('```\n[ref:pem-handbook]\n```') && twin.includes('[ref:pem-handbook](kept)')
+    && twin.includes('[see [ref:pem-handbook]](https://x) [[ref:pem-handbook]](https://y)'), 'a tag that is already link text stays as written');
+  assert.ok(mdTags(md, 'research/x.md', model, { ORIGIN, absolute: true }).startsWith(`A [ref:pem-handbook](${ORIGIN}/${page}.md#pem-handbook)`));
+});
+
+test('records are not catalogue entries, and llms.txt has one line per area and no record', async () => {
+  const catalogued = [...refs.records.values()].filter(r => r.status === 'catalogued');
+  const catalog = await json('catalog.json');
+  const itemIds = new Set(catalog.items.map(i => i.id));
+  assert.deepEqual(catalogued.filter(r => itemIds.has(r.id)).map(r => r.id), []);
+  assert.doesNotMatch(JSON.stringify(catalog), /\/references\/|snippet-only/);
+  const llms = await text('llms.txt');
+  const section = llms.split('\n## References\n')[1];
+  assert.ok(section, 'llms.txt has a References section');
+  const lines = section.split('\n').filter(l => l.startsWith('- '));
+  assert.deepEqual(lines.map(l => l.match(/\/references\/([a-z0-9-]+)\.md\)/)?.[1]), model.pages);
+  for (const r of catalogued) assert.ok(!llms.includes(r.url || '\0') && !llms.includes(`${r.id}`), `llms.txt names ${r.id}`);
+  const full = await text('llms-full.txt');
+  assert.doesNotMatch(full, /^Source: https:\/\/cad-agent\.valpatel\.com\/references/m, 'llms-full.txt carries no reference page');
+  assert.ok(!full.includes('Catalogued records are search snippets'), 'llms-full.txt carries no reference page');
+  const sitemap = await text('sitemap.xml');
+  for (const slug of model.pages) assert.ok(sitemap.includes(`<loc>${ORIGIN}/references/${slug}</loc>`), slug);
+});
+
+test('docs/practice/experts.md is what the generator writes from the committed registry', async () => {
+  assert.equal(await show(EXPERTS), expertsMarkdown(model, { ORIGIN }), 'run node tools/site/compiler/site-references.mjs --experts and commit docs/practice/experts.md');
+  const md = expertsMarkdown(model, { ORIGIN });
+  const sources = [...refs.records.values()].filter(r => r.status === 'source');
+  assert.ok(md.includes(`${sources.length} read sources`));
+  for (const r of sources.filter(r => /^https:\/\//.test(r.url || '')).slice(0, 50)) assert.ok(md.includes(r.url.replace(/[()\s]/g, encodeURIComponent)), r.id);
+  for (const r of [...refs.records.values()].filter(r => r.status === 'catalogued')) assert.ok(!md.includes(r.id), `${r.id} is catalogued, not an expert's source yet`);
+});
+
+test('a hostile record is shown as text: no markup, script URL or broken table gets through', async () => {
+  const evil = '<img src=x onerror=alert(1)>"\'&|*[x](javascript:alert(2))';
+  const yaml = v => JSON.stringify(v);                               // JSON is YAML: the strings arrive as written
+  const fs = {
+    [CORE]: `sources:\n  - {id: z-core, title: ${yaml(evil)}, org: ${yaml(evil)}, authors: [${yaml(evil)}], url: "javascript:alert(3)", areas: [fdm], used_for: [docs/x.md], verified: ${yaml(evil)}}\n`,
+    [`${DIR}g.yaml`]: `sources:\n  - {id: z-cat, title: ${yaml(evil)}, org: ${yaml(evil)}, url: "https://example.com/a|b<c>(d)", summary: ${yaml(evil)}, areas: [fdm], kind: ${yaml(evil)},
+      licence: {class: ${yaml(evil)}, spdx: ${yaml(evil)}, read: false, note: ${yaml(evil)}}, evidence: {class: snippet-only, numbers: claimed},
+      claims: [{text: ${yaml(evil)}, status: ${yaml(evil)}}], process_groups: [${yaml(evil)}], assessment: {role: ${yaml(evil)}, caveat: ${yaml(evil)}}}\n`,
+    [`${DIR}coverage.yaml`]: `rows:\n  - {id: r1, number: '1', topic: ${yaml(evil)}, status: partly, areas: [fdm], gap: ${yaml(evil)}, draft_issue: {title: ${yaml(evil)}, posted: false}}\nwanted:\n  - {group: print, title: ${yaml(evil)}, areas: [fdm], text: ${yaml(evil)}}\n`,
+  };
+  const m = referenceModel(await fake(fs), { domains: [{ slug: 'manufacturing', title: 'Manufacturing', areas: [{ slug: '3d-printing', title: '3D printing', topics: [{ slug: 'fdm' }] }] }] });
+  const s = referenceSite(m, { ORIGIN, revision: 'r', built: 'b', feedbackBox: () => '' });
+  const html = s.pages.map(p => p.body).join('') + linkTags('<p>[ref:z-core] [ref:z-cat]</p>', m);
+  assert.doesNotMatch(html, /<img|onerror=alert\(1\)>|<script/i, 'markup from a record is escaped');
+  assert.doesNotMatch(html, /href="\s*javascript:/i, 'a script URL is never a link');
+  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;&quot;&#39;&amp;'));
+  for (const [, text] of s.files) JSON.parse(text);
+  assert.ok(s.files.some(([f]) => f === 'catalog/references/records.json'));
+  for (const p of s.pages) for (const line of p.markdown.split('\n').filter(l => l.startsWith('| ') && !l.startsWith('| Record') && !l.startsWith('|---')))
+    assert.equal(line.replace(/\\\|/g, '').split('|').length, 9, `${p.md}: a record row keeps its 7 cells: ${line}`);
+  // In Markdown an escaped \< or \] is text; an unescaped one would be markup or a link.
+  const live = /(?<!\\)<img|(?<!\\)\]\(javascript:/i;
+  for (const p of s.pages) assert.doesNotMatch(p.markdown, live, p.md);
+  const experts = expertsMarkdown(m, { ORIGIN });
+  assert.doesNotMatch(experts, live);
+  assert.ok(experts.includes('https://example.com/a%7Cb%3Cc%3E%28d%29') === false, 'a catalogued record is not an expert\'s source');
+});
+
+test('link health joins the JSON only from a health report, never from git (#323 Q5)', () => {
+  const [first, second] = [...model.refs.records.values()];
+  const report = { schema: 'cad-agent-references-health/1', as_of: '2026-11-09', revision: 'abc',
+    summary: { status: { ok: 1, gone: 1 } },
+    records: { [first.id]: { status: 'gone', effective: 'ok', checked: '2026-11-09', soft404: ['title'] },
+      [second.id]: { status: 'moved', effective: 'moved', checked: '2026-11-02', final_url: 'https://example.org/new' } } };
+  const plain = new Map(referenceJson(model, { ORIGIN, revision: 'r', built: 'b' }));
+  const withHealth = new Map(referenceJson(model, { ORIGIN, revision: 'r', built: 'b', health: healthOf(report) }));
+  assert.ok(!plain.get('catalog/references/records.json').includes('"health"'), 'no report: no health anywhere');
+  assert.equal(JSON.parse(plain.get('catalog/references/index.json')).health, undefined);
+  const index = JSON.parse(withHealth.get('catalog/references/index.json'));
+  assert.deepEqual(index.health, { as_of: '2026-11-09', revision: 'abc', status: { ok: 1, gone: 1 } });
+  const brief = JSON.parse(withHealth.get('catalog/references/records.json')).records;
+  assert.equal(brief.find(r => r.id === first.id).health, 'ok', 'the effective status: an accepted soft-404 is ok');
+  const area = model.placed.get(second.id)[0];
+  const rec = JSON.parse(withHealth.get(`catalog/references/${area}.json`)).records.find(r => r.id === second.id);
+  assert.deepEqual(rec.health, { status: 'moved', checked: '2026-11-02', final_url: 'https://example.org/new' });
+  assert.equal(healthOf(null), null);
+  assert.throws(() => healthOf({ schema: 'cad-agent-supply-chain/1' }), /not a cad-agent-references-health/);
+});
+
+test('charts are drawn as links that filter, with what they show spoken', () => {
+  const svg = barChart({ title: 'Evidence', filter: 'evidence', rows: [{ value: 'read', label: 'read', n: 3 }, { value: 'measured', label: 'measured', n: 0 }] });
+  assert.match(svg, /aria-label="Evidence: read 3, measured 0"/);
+  assert.match(svg, /<a href="\?evidence=read#records" data-filter="evidence" data-value="read">/);
+  assert.equal((svg.match(/class="refs-chart-bar/g) || []).length, 1, 'an empty row draws no bar');
+});
+
+test('the reference pages\' stylesheet uses the shared theme and site-local tokens', async () => {
+  const css = (await show('tools/site/assets/references.css')).replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.deepEqual(css.match(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/gi) || [], [], 'use var(--token) from the shared theme or site-local styles, so both themes apply');
+  const siteCss = await show('tools/site/assets/site.css');
+  const themeCss = await show('software/cadagent/webkit/ui/theme.css');
+  assert.match(siteCss, /@import\s+url\(["']?\/kit\/ui\/theme\.css["']?\)/, 'the site loads the canonical shared theme');
+  const tokens = new Set([...`${themeCss}\n${siteCss}`.matchAll(/--([\w-]+):/g)].map(m => m[1]));
+  const used = [...css.matchAll(/var\(--([\w-]+)/g)].map(m => m[1]);
+  assert.deepEqual([...new Set(used.filter(t => !tokens.has(t)))], [], 'every token exists in kit/ui/theme.css or web/site.css');
+});
+
+
+test('short joint-interface citations retain the three canonical document identities', async () => {
+  const names = {
+    'omw-anodizing': 'omw-corp-understanding-and-specifying-anodizing',
+    'nsk-ti-0001': 'nsk-bearing-shaft-and-housing-tolerance-nsk-technical',
+    'general-bearing-fits': 'skf-shaft-and-housing-fits-skf-catalog-excerpt',
+  };
+  const page = await text('research/manufacturing/joint-interfaces.html');
+  for (const [alias, canonical] of Object.entries(names)) {
+    assert.equal(refs.aliases.get(alias), canonical);
+    assert.equal(refs.records.has(alias), false, 'a short display key must not add a document');
+    assert.ok(page.includes(`href="${model.home(canonical)}"`), `${alias}: citation links to its existing row`);
+    assert.ok(page.includes(`>${alias}</a>`), `${alias}: actual displayed citation is short`);
+    assert.ok(!page.includes(`>${canonical}</a>`), `${canonical}: no unbreakable long citation badge`);
+  }
+});
+
+test('moulding review aliases publish the same three full-read source identities', async () => {
+  const page = await text('research/manufacturing/moulding-wall-bond-and-release-review.html');
+  const pairs = [
+    ['pl-mould-walls', 'protolabs-injection-molding-wall-thickness-guidelines'],
+    ['pl-overmould', 'protolabs-designing-for-overmolding-design-tip'],
+    ['fictiv-mould-undercuts', 'fictiv-injection-molding-undercuts'],
+  ];
+  const records = (await json('catalog/references/records.json')).records;
+  for (const [alias, id] of pairs) {
+    assert.equal(refs.aliases.get(alias), id);
+    assert.equal(refs.records.has(alias), false, 'citation alias is not another document');
+    assert.equal(records.filter(r => r.id === id).length, 1);
+    assert.equal(records.find(r => r.id === id).status, 'source');
+    assert.ok(page.includes(`href="${model.home(id)}"`), id);
+    assert.ok(page.includes(`>${alias}</a>`), alias);
+  }
+});
+
+test('bend-file and CNC-hole short citations retain the exact full-read identities', async () => {
+  const page = await text('research/manufacturing/sheet-metal-file-and-hole-review.html');
+  const pairs = [
+    ['scs-bend-files', 'sendcutsend-designing-for-online-sheet-metal-bending'],
+    ['scs-bend-steps', 'sendcutsend-step-by-step-guide-to-sheet-metal-bending'],
+    ['protolabs-hole-guide', 'protolabs-cnc-hole-design-through-blind-tapped-and-more'],
+  ];
+  const records = (await json('catalog/references/records.json')).records;
+  for (const [alias, id] of pairs) {
+    assert.equal(refs.aliases.get(alias), id);
+    assert.equal(refs.records.has(alias), false, 'short citation is not another source');
+    assert.equal(records.filter(r => r.id === id).length, 1);
+    assert.equal(records.find(r => r.id === id).status, 'source');
+    assert.ok(page.includes(`href="${model.home(id)}"`), id);
+    assert.ok(page.includes(`>${alias}</a>`), alias);
+  }
+});
+
+test('Stratasys review aliases keep two existing identities and unresolved evidence scope', async () => {
+  const page = await text('research/process-profiles.html');
+  const records = (await json('catalog/references/records.json')).records;
+  for (const [alias, id] of [
+    ['sd-fdm-2025', 'stratasys-direct-stratasys-fdm-design-guide-stratasys-direct'],
+    ['sd-sls-2023', 'stratasys-direct-sls-design-guide-2023'],
+  ]) {
+    assert.equal(refs.aliases.get(alias), id);
+    assert.equal(refs.records.has(alias), false, 'short citation is not another document');
+    assert.equal(records.filter(r => r.id === id).length, 1);
+    assert.equal(records.find(r => r.id === id).evidence, 'read');
+    assert.ok(page.includes(`href="${model.home(id)}"`), id);
+    assert.ok(page.includes(`>${alias}</a>`), alias);
+  }
+  assert.match(page, /unresolved-conflicting-source/);
+  assert.match(page, /unresolved-confirm-supplier/);
+});
+
+
+test('creator credit retains people and organisation without inventing or repeating names', () => {
+  assert.equal(creatorText({authors:['  Ada Lovelace ', 'ada lovelace'],org:'Example Lab'}), 'Ada Lovelace · Example Lab');
+  assert.equal(creatorText({authors:['Ada'],org:' ada '}), 'Ada');
+  assert.equal(creatorText({authors:['Ada']}), 'Ada');
+  assert.equal(creatorText({org:'Example Lab'}), 'Example Lab');
+  assert.equal(creatorText({}), '');
+  assert.equal(creatorText({authors:[null,{},' Ada '],org:{bad:true}}), 'Ada');
+});
+
+test('original links preserve query parameters and reject unsafe destinations', () => {
+  const url='https://example.com/document?dlpdf=t&part=92160A227#specs';
+  assert.equal(originalUrl(url),url);
+  for(const unsafe of ['javascript:alert(1)','data:text/html,x','//example.com/x','/local','https://user:password@example.com/x','https://'])
+    assert.equal(originalUrl(unsafe),null,unsafe);
+});
+
+test('reference HTML Markdown and citation tooltips credit named people alongside their publisher', async () => {
+  const source={id:'credit-example',title:'A useful study',org:'Example Lab',authors:['Ada Lovelace'],url:'https://example.com/original?dlpdf=t&part=1',areas:['fdm'],verified:'2026-11-12 read'};
+  const m=referenceModel(await fake({[CORE]:JSON.stringify({sources:[source]})}),{domains:[{slug:'manufacturing',title:'Manufacturing',areas:[{slug:'3d-printing',title:'3D printing',topics:[{slug:'fdm'}]}]}]});
+  const site=referenceSite(m,{ORIGIN,revision:'r',built:'b',feedbackBox:()=>''});
+  const area=site.pages.find(p=>p.url==='/references/3d-printing');
+  assert.ok(area.body.includes('Ada Lovelace · Example Lab'));
+  assert.ok(area.body.includes('href="https://example.com/original?dlpdf=t&amp;part=1"'));
+  assert.ok(area.body.includes('Read original'));
+  assert.ok(site.pages[0].body.includes('No sponsorships, partnerships or paid placements'));
+  assert.ok(site.pages[0].body.includes('Meet the creators'));
+  assert.ok(area.markdown.includes('Ada Lovelace · Example Lab'));
+  assert.ok(area.markdown.includes('— Read original'));
+  assert.match(linkTags('[ref:credit-example]',m),/title="A useful study, Ada Lovelace · Example Lab/);
+  assert.match(area.body,/data-text="[^"]*ada lovelace/,'people are searchable even when org is recorded');
+});

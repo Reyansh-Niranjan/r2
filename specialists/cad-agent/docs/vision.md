@@ -1,0 +1,399 @@
+# Vision and structure
+
+cad-agent is meant to become a **self-improving, agentic CAD toolkit**. Every agent that uses it on a real project,
+ours or anyone else's, can leave it a little better. Our maintainer agents work on it every day, at a steady pace, to
+bring that work in, keep the structure clean as it grows, and publish it, so the next agent finds it in fewer steps.
+This page sets out that long-term loop first. Below it is the structure that makes the loop work: a topic tree,
+maturity levels, confidence, evaluation, discovery and folders. Tracking: #139.
+
+## The long-term loop
+
+```mermaid
+flowchart TD
+    U["an agent on a real project<br/>hits a gap or finds a better way"] --> E["evidence<br/>an issue, or a PR with<br/>tests and sources"]
+    E --> M["maintainer agents<br/>safety review, then fit it<br/>to the structure, keeping credit"]
+    M --> G["gates and an<br/>independent review"]
+    G --> R["merge to dev,<br/>release to main"]
+    R --> S["site, catalogue and<br/>llms.txt rebuild by themselves"]
+    S --> D["the next agent finds the tool<br/>in fewer calls"]
+    D --> U
+    class U,E near
+    class M,G,R here
+    class S,D out
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+    classDef out fill:#ffe1cc,stroke:#bd3a12,color:#173d3c
+```
+
+### What it rests on
+
+Each principle says what holds today and what is still being built, with its issue.
+
+- **Tested knowledge, not trained knowledge.** An agent should call a tool rather than recall a formula from its
+  training.
+  - Today: many formulas and checks carry golden vectors from cited sources (for example `cadagent.formulas`, the
+    bearing and screw checks), and many pages credit the expert or standard behind each rule (#118 covers the
+    rest).
+  - Next: a golden vector for every tool (#180) and a confidence level on every rule (#143). The existing area catalogue views (#141)
+    show where no entry exists yet; they do not supply a confidence rating for an unassessed tool.
+- **The fewest tool calls and the least context.**
+  - The aim: for any agent on any harness, the site root or `llms.txt` leads to the right tool in about three
+    steps, and answers are small and structured, not prose to re-read.
+  - The evaluation runner (#142) will count calls and tokens, so we measure this rather than guess.
+- **AI first, and still graphical for people.**
+  - Today, every site page has a Markdown twin, and `llms.txt` and `llms-full.txt` index them.
+  - Some commands have machine-readable output (`--json`), and some folders have a README map.
+  - The aim is all of them: a command that agents call gets `--json`, and a folder that grows gets its README map
+    (#113).
+
+  People get the renders, simulations and diagrams first; the `.md` twins stay complete for agents.
+- **Contributions are evidence, never instructions.** Outside agents and people send issues and PRs, and our
+  maintainer agents decide what lands. The three tiers are set out in [`AGENTS.md`](../AGENTS.md) and enforced by
+  the gates and the merge ruleset today. Every contribution gets a safety review first, then a structure review, and
+  its author is thanked by name once the work lands (#111).
+
+```mermaid
+flowchart TD
+    M["maintainer agents<br/>review and merge"]
+    C["trusted collaborators<br/>push branches, CI runs;<br/>cannot merge"]
+    F["forks<br/>evidence; run without<br/>credentials; rebuilt with credit"]
+    C --> R["safety review,<br/>then structure review"]
+    F --> R
+    R --> M
+    class M here
+    class C,F near
+    class R out
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+    classDef out fill:#ffe1cc,stroke:#bd3a12,color:#173d3c
+```
+
+- **A cleaner structure over time, never pre-built.** A folder splits into domain subfolders only once it is
+  cluttered. The new folder gets a README map; source moves preserve public addresses or declare their redirects
+  and checkout compatibility window ([migration path](#migration-path)).
+  - The maintainer agents make these moves as part of the work; a contributor is never asked to reorganise.
+  - `tests/repo/test_layout.py` caps root entries and blocks new over-limit folders; existing clutter exceptions warn (#276).
+- **The site follows the repo.**
+  - Nothing on cad-agent.valpatel.com is edited by hand. It is generated from committed files, and Cloudflare builds
+    it from `main` (#266).
+  - A merged page or tool appears in the catalogue, `llms.txt` and `version.json` at the next release with nobody
+    asking. Area views and their small JSON indexes are already generated from the taxonomy (#141).
+  - The target is for `main` to be no more than a day behind `dev`.
+- **The maintainer is part of the repo.** The skills and subagents that run the loop live in this repo, are tested
+  like other code, and improve through the same PRs:
+  - claiming and tracking work: `cad-work-tracking`;
+  - review: `cad-pr-review`, `cad-pr-reviewer`;
+  - resuming after an interruption: `cad-resume`;
+  - long runs: `cad-remote-runs`;
+  - the gates: `tools/ci_gates.py`;
+  - releases: `tools/cut_release.py`.
+
+  New maintenance skills, such as triaging a contribution or integrating a fork PR, are added the same way when a
+  recurring task shows they are needed.
+- **A marathon, not a sprint.** The maintainer works every day at a steady pace that fits its budget:
+  - a few agents at a time;
+  - closing work out before starting more;
+  - small, frequent releases.
+
+  Cost matters too. Once it exists, the evaluation framework (#142) will show whether a smaller model with cad-agent
+  can do a job that otherwise needs a larger one.
+
+### How we know it is working
+
+| Measure | Where it comes from | Status |
+|---|---|---|
+| Calls, tokens and peak context to reach the right tool | the evaluation runner's discovery jobs | planned (#142) |
+| Pass rate with cad-agent against without it, per model and harness | standard jobs, `kit` against `bare` | planned (#142) |
+| Time from a contribution to the live site | PR merge time and timestamped deployment/readback evidence matching `version.json.revision` | manually measurable |
+| Outside contributors whose work landed with their name on it | git authorship | measurable now |
+| Flat folders over the clutter threshold | the layout ratchet | enforced now; named clutter exceptions warn (#276) |
+| Rules with a confidence level and a source | the reference registry | in progress (#118, #143) |
+
+### What exists today, and what is planned
+
+| | |
+|---|---|
+| **Exists** | the tested toolkit grouped by domain, and the topic tree with its check; the agent workflow kit (skills and subagents above); the review and release gates; changelog fragments; a generated site with Markdown twins, `llms.txt`, `llms-full.txt`, `version.json` and `visuals.json`; area catalogue views with `catalog/index.json` and per-area JSON |
+| **Planned** | the evaluation runner and standard jobs (#142); confidence levels on every tool and rule (#143); skills for triaging and integrating contributions |
+
+## How the structure serves the loop
+
+The structure comes first so that many areas can grow in parallel without a reorganisation later. cad-agent grows
+into a well-ordered map of hardware design. It covers mechanisms and enclosures, manufacturing processes, thermal
+design, simulation, and electrical work from harnesses to test systems. Every area sits at its own stage of maturity,
+and each has tools, checks, lessons, cited research and standard example jobs. The work itself still goes where real
+projects need it first (see [Priorities](#priorities)), then to what makes good demos and videos.
+
+## Requirements
+
+Any layout, page format or tool added here should serve these:
+
+- **One clear hierarchy by topic:** domain → area → topic. One file names them all, [`docs/areas.yaml`](areas.yaml).
+  The tree is a starting point, not a lock; areas are added, split or merged as the work shows where the seams are.
+- **Many parallel paths at different maturity.** An area can exist as a single line before anything is built, so work
+  has a place to land and readers can see what is missing.
+- **Deterministic tools, validated.** We adopt good open-source tools first and build only for the gaps. Every tool
+  and rule carries a confidence level, which may be an estimate, backed by its sources and by results from our own
+  projects.
+- **A standard evaluation.** Example jobs per area, each with a deterministic grader, run across models, harnesses and
+  local models, with and without cad-agent. The results are real numbers.
+- **Discovery in few steps.** A person or an agent finds the right tool for a problem in the fewest calls and the
+  least context. This is the long-term aim; today it is enough not to work against it.
+- **Honest limits.** CAD, calculation and simulation narrow a design down; they do not prove that a part fits or
+  holds. A measured print does. Pages say which one they rest on.
+
+## The topic tree
+
+The full tree, with what already exists for each node, is [`docs/areas.yaml`](areas.yaml). The existing
+[catalogue](https://cad-agent.valpatel.com/catalog) generates its domain and area views from that tree (#141). In outline:
+
+| Domain | Areas |
+|---|---|
+| Mechanical design | CAD modelling and kernels; mechanisms; housings and enclosures; compliant mechanisms; gears; belt and chain drives; wheels and driving; walking; fasteners, bought hardware and assembly; fixtures and jigs (pogo-pin PCBA test fixtures, general fixtures); mould design |
+| Manufacturing | 3D printing; CNC machining; laser cutting (plastics, metals); sheet metal; mould making (silicone moulds, urethane casting) |
+| Thermal | conduction and heat sinks; airflow and fans; thermal validation |
+| Simulation and validation | structural FEA; CFD; motion and dynamics; topology optimisation; design exploration; results and visuals; physical tests and coupons |
+| Electrical design | electrical panels; wiring harnesses; circuit boards (breakout, adapter, pass-through tap, power converters, relay boards, DAQ and signal conditioning); test systems (HIL simulators, test benches on extrusion frames) |
+| Practice | agent process and workflow; design process; review and evidence; publishing; evaluation |
+
+Practice cuts across every domain: how agents work, review and publish here.
+
+## Maturity: how an area grows
+
+Each domain, area and topic records one maturity level. It moves up only when the evidence for the next level exists.
+
+```mermaid
+flowchart TD
+    I["idea<br/>a line in areas.yaml"] --> S["surveyed<br/>tools and sources compared,<br/>adopt-vs-build recorded"]
+    S --> T["tooling<br/>a tool or check with tests,<br/>a page with its limits"]
+    T --> V["validated<br/>sources agree, confidence<br/>recorded, standard jobs pass"]
+    V --> P["proven<br/>used on a real project,<br/>with a measured result"]
+    class I near
+    class S,T,V here
+    class P out
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+    classDef out fill:#ffe1cc,stroke:#bd3a12,color:#173d3c
+```
+
+Most areas start at `idea` on purpose. An area view that says "idea, nothing built yet" with its issue is more useful
+than an area nobody can find.
+
+Areas and topics are judged on their own evidence, and an area is never rated below its most mature topic. A domain
+takes the highest level among its areas. That says how far its best-developed area has got, not the domain as a whole,
+so the catalogue tree shows every area's level beside it. `tests/repo/test_areas.py` checks both rules.
+
+## Confidence on tools and rules
+
+This is planned, not built (#143). Every tool and rule will get a confidence level and the evidence behind it. The
+level will be stored with each rule, in the shared reference registry (#118) and the process profiles (#99),
+and with each tool in the catalogue.
+
+The estimate is the chance that the tool or rule gives a right answer, within its stated tolerance, for inputs inside
+its stated limits. It rates one tool or rule. It is not a probability to multiply or average along a chain of tools,
+because their errors are not independent.
+
+| Level | Rough estimate | Evidence |
+|---|---|---|
+| `high` | ≈ 0.9 | Two or more independent primary sources agree, tests reproduce their worked examples and, for a physical claim, a measured result exists |
+| `medium` | ≈ 0.7 | One primary source with reproduced examples, or several secondary sources that agree |
+| `low` | ≈ 0.4 | A single secondary source, a search snippet, or untested judgement |
+| `unknown` | — | Not assessed yet; still written down, so a missing rating is a visible choice |
+
+## Evaluation framework
+
+Standard jobs answer two questions with numbers: which models and harnesses can do which jobs, and how cad-agent's
+tooling changes the result (#142; related #39).
+
+```mermaid
+flowchart TD
+    J["job<br/>task, inputs, budget"] --> R["runner<br/>harness × model × mode"]
+    R --> G["deterministic grader<br/>named checks on the outputs"]
+    G --> S["results<br/>pass rate, tool calls, tokens,<br/>peak context, time, cost"]
+    S --> H["area view and<br/>results table"]
+    class J near
+    class R,G here
+    class S,H out
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+    classDef out fill:#ffe1cc,stroke:#bd3a12,color:#173d3c
+```
+
+Nothing here exists yet: no `evals/` folder and no runner. This is the plan #142 builds from.
+
+- **Survey first.** Before building a runner, #142 will survey existing evaluation harnesses and CAD benchmarks (some
+  are already listed in `docs/research/landscape.json`) and record adopt-vs-build, as for any new capability.
+- **Jobs** will live at `evals/jobs/<domain>/<area>/<job>/`: the task as the user would write it, input files, a time
+  and token budget, and a reference solution that passes.
+- **Graders** will be code, not opinions. They measure geometry, read `cad-agent` check results, or compare numbers
+  within a stated tolerance. Each says what it cannot see.
+- **The runner** will try a job with a harness (Claude Code, Codex, Hermes and others) and a model (hosted, or local
+  through a configurable endpoint). It runs in two modes: `bare` (no cad-agent) and `kit` (cad-agent and its skills
+  installed).
+- **Credentials:** each run gets a fresh sandbox holding only what the model needs. That is the hosted model's API
+  key, passed in for that run alone, or a local endpoint's address. Repository and GitHub tokens, deploy keys and any
+  other secrets stay out.
+- **Results** will be one JSON line per run, summarised as pass rates with intervals over repeated runs. The same
+  runner will measure discovery: how many calls and tokens it takes to reach the right tool.
+
+## Discovery
+
+Use the existing [catalogue](https://cad-agent.valpatel.com/catalog) as the area view (#141). Each selected area
+shows its scope, maturity, issue links and mapped entries; the same filters are shareable in its URL. Keep this
+single discovery surface instead of adding a parallel `/areas/` page tree.
+
+Agents start at `llms.txt`, then choose either a linked guide or `catalog/index.json` → `catalog/<area>.json` →
+the tool's `doc` or `markdown` link. The index mirrors the taxonomy's domains, areas and maturity; each area file
+lists its entries. Every catalogue entry has `areas`, and unknown slugs fail the build. A separate `areas.json`
+would duplicate that existing contract.
+
+<details>
+<summary>Measured path and what the checks establish</summary>
+
+On 2026-11-07, ordinary public responses at released main `eb5d163e` led from `llms.txt` to the snap-fit guide:
+three further GETs through the index and area file, or one further GET through the guide link already in `llms.txt`.
+Those are four and two total discovery GETs respectively, including the initial `llms.txt`; two separate revision
+checks are not discovery steps. Each next URL came from the preceding response, and the final page contained the
+actual `cad-agent snapfit` instructions. This is one worked case, not a measured bound for every task.
+
+`website-catalog.test.mjs` checks index/area membership and counts against `docs/areas.yaml` and `catalog.json`,
+including real document targets. The browser suite checks the shared area filters, counts, maturity displays and
+phone controls. These consumers protect discovery; they do not implement tool confidence (#143), standard jobs
+or a cross-model evaluation runner (#142). The general folder-map checker remains #113.
+
+</details>
+
+## Folder design
+
+Use **one taxonomy, kind folders with explicit topic ownership, and generated catalogue views.**
+
+```mermaid
+flowchart TD
+    T["docs/areas.yaml<br/>domain → area → topic"] --> H["area catalogue<br/>small JSON indexes"]
+    T --> K["kind folders use<br/>the same slugs"]
+    K --> C["software/cadagent<br/>by domain (#121)"]
+    K --> L["lessons by area;<br/>docs, research<br/>by domain"]
+    K --> E["evals/jobs<br/>by area"]
+    class T here
+    class H here
+    class E out
+    class K,C,L near
+    classDef here fill:#fffdf5,stroke:#173d3c,color:#173d3c
+    classDef near fill:#eef1e4,stroke:#6f8a80,color:#173d3c
+    classDef out fill:#ffe1cc,stroke:#bd3a12,color:#173d3c
+```
+
+- **The kind folders keep their jobs:**
+  - `software/cadagent` is grouped by domain, as the tree is (#121): `cadagent.mechanical`, `cadagent.simulation`,
+    `cadagent.review` and so on, with shared helpers such as `cadagent.geometry` at the top. One tool still serves
+    many areas (FEA checks a leg frame and a lid alike), so each module has one home, an `api:` line in its own
+    domain, and a node that relies on another domain's module names it under `uses:` (thermal's airflow area uses
+    `cadagent.simulation.cfd`). `tests/repo/test_package_areas.py` keeps the code and the tree in step.
+  - `.agents/skills/` and `.agents/agents/` retain their installed names; harness discovery follows the canonical kit.
+  - `docs/lessons/` has six collections. The explicit `lessons:` mapping names each collection's owner; a folder
+    need not repeat that node's slug. Keep a useful existing name unless a reviewed content move warrants a change.
+  - `docs/` and `docs/research/` gain domain folders once an area has a few pages (#145).
+  - Planned `evals/jobs/` uses domain and area names (#142); that folder and general runner do not exist yet.
+- **The taxonomy ties them together.** Each node lists its pages, commands, modules (its own under `api:`, other
+  domains' under `uses:`), skills, lessons and issues. Existing catalogue views expose the mapped entries, scope,
+  maturity and issue links without duplicating source files; confidence and evaluation results retain their own work.
+
+**Why not topic-first folders** (`areas/<domain>/<area>/` holding the code, lessons, research and jobs together)?
+
+- Python code cannot be split by topic without duplicating shared tools.
+- Harnesses need skills in one flat folder.
+- Code, prose and data have different tests and review rules.
+- Cross-cutting content (fasteners, FEA, the review process) would need a home in many places at once.
+- It would undo #121's and #133's fresh moves.
+
+The catalogue gives the topic-first view without those costs.
+
+## Root consolidation (2026-11-05)
+
+The owner asked for a starting screen with only necessary files and a visible README. The 2026-11-05 baseline was **30 tracked root entries** (files and folders together); the reviewed batches below reached **17** in v0.22.0. `tests/repo/test_layout.py` caps that count. Ignored local files are outside this measure. The [publication receipt](https://github.com/Valpatel/cad-agent/issues/368#issuecomment-6677045510) records the released revision and public checks; the [consolidation issue](https://github.com/Valpatel/cad-agent/issues/362) retains each batch's evidence.
+
+| Batch | Owning location | Root count after batch | Contracts checked |
+|---|---|---|---|
+| Transcript mining and weekly procedure | `tools/mining/`, `docs/practice/weekly-upstream-update.md` | 28 | CLI examples, private-input ignore paths, provenance and topic map |
+| Contributor and security policies | `.github/CONTRIBUTING.md`, `.github/SECURITY.md` | 26 | GitHub discovery, relative links, stable public routes and real source provenance |
+| Upstream registry and notices | `software/vendor/upstreams/`, `software/vendor/THIRD_PARTY_NOTICES.md` | 24 | Dependency identities, unknown-code detection, notice generation, catalogue and dated report evidence |
+| Guides, research, lessons and examples | Domain guides under `docs/`; research data in `docs/research/`, lessons in `docs/lessons/`, examples in `docs/examples/` | 21 | Package data defaults, citations and scans, catalogue IDs/kinds, public URLs, relative links, checkout and wheel starter behavior |
+| Site source, assets and configuration | `tools/site/` and its `assets/` folder | 17 | Node ESM resolution, test dependency context, public assets/installers, provenance, CI/cache paths, npm audit history and the actual Pages build contract |
+
+The ownership layout keeps 14 tracked root entries: `.agents`, `.claude-plugin`, `.github`, `.gitignore`, `AGENTS.md`, `CHANGELOG.md`, `CLAUDE.md`, `LICENSE`, `README.md`, `docs`, `pyproject.toml`, `software`, `tests` and `tools`. Canonical skills and roles live inside `.agents`; the native plugin manifest and existing installer retain their discovery and installed-name contracts. `software` owns the toolkit package and pinned dependencies. Release fragments live under `docs/changelog.d`, while `CHANGELOG.md` remains at the root so its historical relative links retain their meaning. Root count includes both files and folders; it is enforced by the existing layout check.
+
+The package manifests and Wrangler file are current site integration defaults. Their move co-locates the Node site modules, because ESM resolves dependencies upward from an importing module. Node tests remain with their test domains and use an explicit dependency context for the site package. The web kit's JavaScript module scope remains explicit. Public page routes, catalogue identities and served asset paths remain stable while GitHub sources and breadcrumbs point to the new physical files.
+
+Before a move, list its actual path consumers and refine their existing checks. Prove moved sources are consumed, missing current files cannot be replaced by stale old copies, and historical comparisons retain the same identities. A root entry must actually disappear; a root wrapper does not meet the count goal. Research data/defaults and wheel inputs need runtime checks, alongside site discovery. Shared Pages build settings receive independent review before change; the verified steady command runs from the repository root as `npm --prefix tools/site ci && npm --prefix tools/site run build`, with root `dist` output, production `main` and no preview deployments.
+
+## Migration path
+
+Existing content moves in small batches, never in one big reorganisation (#145):
+
+1. **Now:** the taxonomy places every existing page, command, skill, agent and lesson folder. A test fails when a new
+   one is not placed, so the map cannot fall behind. A PR that adds one adds its line to `docs/areas.yaml` (the rule is
+   in CONTRIBUTING.md, AGENTS.md and the PR template). When two open PRs cross, the one that merges second adds it,
+   after merging dev and re-running its CI, because dev does not require branches to be up to date.
+2. **Existing discovery:** the site generates area catalogue views, `catalog/index.json` and `catalog/<area>.json`
+   from the taxonomy. These satisfy #141's chosen discovery path; a second hub tree and `areas.json` are not needed.
+3. **Published in v0.22.0:** mechanical and practice guides, and the agent-workflow and manufacturing research
+   collections, have domain folders and visual maps. `tools/site/publication.mjs` selects their real sources;
+   `tools/site/page-sources.json` keeps existing public URLs and catalogue identities stable. Nested pages and
+   their Markdown twins are published and checked; missing required current sources cannot fall back to stale old files.
+4. **Continue in small batches:** move pages when an area has three or more, or when a page is being edited anyway.
+   Distinguish a source-file move from a public URL change:
+   - If its public URL stays the same, update the source map and actual path consumers. The published page still
+     answers directly at its established address; it does not need a redirect to itself.
+   - If a public URL changes, retain a permanent rule in `tools/site/compiler/site-redirects.txt`, for the page and
+     its Markdown twin, with a target that the build actually publishes. Keep any promised source-path stub for
+     its declared compatibility window; the numbered lesson stubs expired at v0.6.0, but their 301s remain.
+   - State checkout-path changes and compatibility windows in the CHANGELOG. v0.22.0 moved the old knowledge roots
+     into `docs/` without recreating them as stub folders; scripts using those source paths must update.
+   - Update every reference and `docs/areas.yaml`, and give each new folder a README and map (#113).
+5. **As jobs land:** `evals/jobs/` fills in area by area, starting with areas at `tooling`, since those have something
+   to measure.
+
+<details>
+<summary>Current migration boundary and lesson names — 2026-11-07</summary>
+
+The released hierarchy at `a32c1e67` and integration baseline `12a083da` both have 14 tracked root entries.
+Within each kind of writing, the remaining domain-specific root collections have fewer than three pages:
+for example, two simulation surveys in `docs/research/`, and one thermal guide in `docs/`.
+Shared guides and data retain one home even when several topics use them. The growth rule in
+[AGENTS.md](../AGENTS.md#repo-structure-and-where-files-go) governs later batches; it does not require empty
+folders or one folder per topic today.
+
+The six lesson names are intentional mappings in [`areas.yaml`](areas.yaml), not six pending renames:
+
+| Topic owner | Existing lesson collection |
+| --- | --- |
+| `mechanical` | [mechanical](lessons/mechanical/README.md) |
+| `simulation` | [simulation](lessons/simulation/README.md) |
+| `wiring-harnesses` | [wiring](lessons/wiring/README.md) |
+| `circuit-boards` | [electronics](lessons/electronics/README.md) |
+| `agent-workflow` | [process](lessons/process/README.md) |
+| `review-and-evidence` | [review](lessons/review/README.md) |
+
+`test_every_lesson_area_folder_is_claimed` requires each real collection to have exactly one owner; the layout
+ratchet protects the compact root. Existing page selectors, source maps and redirect checks protect published
+addresses during moves. These checks do not implement the general folder-map checker (#113); area discovery uses
+the catalogue contract described above. Source revision alone does not establish deployment or cache-policy
+acceptance (#381).
+
+</details>
+
+## Priorities
+
+1. **Gyropup first** (#144, in the order of Valpatel/gyropup#31):
+   - motor mounts for the RS-04 leg actuators and the 3115 flywheel motors (mechanisms; fasteners, bought hardware and assembly;
+     3D printing);
+   - the first leg: five-bar kinematics (walking, with #137's equations), frame and bearing strength (structural FEA),
+     the wheel interface (wheels and driving), and cable routing (wiring harnesses);
+   - the carrier and turret (circuit boards, wiring harnesses, heat sinks, housings);
+   - covers with snap and compliant features (compliant mechanisms).
+2. **Demos and videos:** interactive simulations and animated figures (#137, #136), linkage and gait animations, and
+   FEA, CFD and topology renders.
+3. **Everything else** grows in parallel at its own maturity, from the issues filed against its area.
+
+The `demo` priority flag in [`docs/areas.yaml`](areas.yaml) marks the areas for item 2, so catalogue views and tools can sort by
+it. The catalogue singles out no project: an area's `projects` lists every real project that used it, alike.

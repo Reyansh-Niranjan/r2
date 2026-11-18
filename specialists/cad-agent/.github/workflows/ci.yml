@@ -1,0 +1,180 @@
+name: CI
+
+on:
+  pull_request:
+    # 'edited' re-runs CI when a PR's base branch changes (e.g. retargeted from main to dev)
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      installer_evidence:
+        description: 'Run the opt-in actual Windows installer study (downloads CAD dependencies)'
+        type: boolean
+        default: false
+      installer_copy_evidence:
+        description: 'Run actual Windows explicit-copy content/resource/foreign-file evidence'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # cancel superseded PR runs only; every commit on main and dev keeps its own result
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Fast: the package with only its required dependencies; every optional-dependency test must skip cleanly.
+  # 3.10 is the oldest supported Python (and what JetPack 6 ships on Jetson). The cad and sim extras need 3.11 or newer
+  # (#151: every Pillow for 3.10 has critical advisories, and CadQuery 2.8 needs 3.11), so `full` runs on 3.12.
+  core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with: {python-version: '${{ matrix.python }}'}
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - run: cad-agent --help
+      # the lowest releases pyproject.toml allows for the required dependencies and pytest (#151); numpy 1.22 has
+      # wheels only up to Python 3.10
+      - if: matrix.python == '3.10'
+        run: pip install "numpy==1.22.0" "pyyaml==6.0" "pytest==9.0.3" && python -m pytest -q
+
+  # Full: CAD, FEA, simulation, robot, site and explore extras, so the geometry, mesh, solver, simulator and optimiser
+  # tests run instead of skipping.
+  full:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30          # usually 4-7 minutes; a hung step must not hold a PR for GitHub's default six hours
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with: {python-version: '3.12', cache: pip}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1   # v7.1.0
+        with:
+          node-version: 22
+      - name: Verify Node version for the installed SDK consumer
+        run: node --version && node -e "if (Number(process.versions.node.split('.')[0]) !== 22) process.exit(1)"
+      # A mirror can hang: each try is time-boxed, and three tries fit inside the step's limit.
+      - name: System libraries for the gmsh, VTK and MuJoCo wheels
+        timeout-minutes: 14   # worst case 3 x (90 + 90 + 10 + 60) s = 12.5 min
+        run: |
+          # Hosted Ubuntu sources use mirror+file:/etc/apt/apt-mirrors.txt.
+          # Prefer a registered HTTPS mirror outside Canonical DNS; retain its HTTPS fallbacks.
+          sudo python3 tools/ci/apt_mirror.py
+          # Fail one stalled transport promptly so the mirror method can reach its next HTTPS fallback.
+          # The three outer attempts already provide retries; keep both existing 90-second process caps.
+          apt_options=(-o Acquire::Retries=0 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5)
+          for try in 1 2 3; do
+            sudo timeout 90 apt-get "${apt_options[@]}" update -q &&
+              sudo timeout 90 apt-get "${apt_options[@]}" install -yq --no-install-recommends libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1 libgl1 libegl1 &&
+              exit 0
+            echo "apt try $try failed or timed out; retrying"; sleep 10
+            sudo timeout 60 dpkg --configure -a || true   # a timeout inside dpkg leaves it "interrupted": finish it first
+          done
+          exit 1
+      - run: pip install -e ".[cad,fea,robot,site,sim,explore,bambu,dev]"
+      # importorskip would turn a broken heavy install into silent skips: import them all first, loudly
+      - run: python -c "import cadquery, OCP, trimesh, vtk, matplotlib, PIL, gmsh, skfem, mujoco, markdown, pymoto, pyvista, imageio, manifold3d, rtree, optuna, paho.mqtt.client; print('extras import ok')"
+      - run: python -u -m pytest -vv -rs -o faulthandler_timeout=120
+      - name: Verify the installed wheel consumers outside the checkout
+        timeout-minutes: 6
+        run: python tests/cli/test_init.py --wheel-smoke
+      # the optimiser's adapter for optuna below 5 (constraints_func instead of Trial.set_constraint)
+      - run: pip install "optuna==3.4.0" && python -m pytest -q tests/simulation/explore/test_explore_optimise.py
+      # markdown at its floor (#151), for the release notes and site pages it renders
+      - run: pip install "markdown==3.8.1" && python -m pytest -q tests/publish/test_release.py tests/publish/test_site.py tests/simulation/explore/test_explore_compare.py tests/publish/test_reproducible_outputs.py
+
+  mermaid-provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: {persist-credentials: false}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1   # v7.1.0
+        with: {node-version: 22}
+      - run: npm --prefix tools/mermaid ci --ignore-scripts
+      - run: npm --prefix tools/mermaid run check
+
+  # Execute the documented PowerShell checksum/failure/cleanup procedure on Windows, with inert download/child
+  # fixtures on ordinary runs. The explicit manual evidence input also exercises the real installer below.
+  installer-windows:
+    runs-on: windows-2025
+    timeout-minutes: ${{ inputs.installer_evidence && 65 || inputs.installer_copy_evidence && 10 || 5 }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with: {python-version: '3.12'}
+      - run: python -m pip install "pytest==9.0.3"
+      - run: python -c "import shutil; assert shutil.which('pwsh'), 'PowerShell must actually run these guards'"
+      - run: python -m pytest -q tests/cli/test_installer.py -k "checked_installers_pin or actual_powershell_guide or install_ps1_parses"
+
+      # Explicit manual study only: normal PR/weekly runs keep their fast guard meaning.
+      - name: Run the actual installer body and real uv handoff
+        if: github.event_name == 'workflow_dispatch' && inputs.installer_evidence
+        env:
+          CAD_AGENT_REAL_INSTALLER: '1'
+          CAD_AGENT_INSTALL_EVIDENCE_DIR: ${{ runner.temp }}/installer-evidence
+        run: python -m pytest -q tests/cli/test_installer.py -k actual_windows_installer_body --basetemp "${{ runner.temp }}/installer-pytest"
+      - name: Run the actual explicit-copy content and resource consumer
+        if: github.event_name == 'workflow_dispatch' && inputs.installer_copy_evidence
+        env:
+          CAD_AGENT_REAL_COPY: '1'
+          CAD_AGENT_INSTALL_EVIDENCE_DIR: ${{ runner.temp }}/installer-evidence
+        run: |
+          python -m pip install --editable .
+          python -m pytest -q tests/cli/test_installer.py -k actual_windows_copy_content --basetemp "${{ runner.temp }}/copy-pytest"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always() && github.event_name == 'workflow_dispatch' && (inputs.installer_evidence || inputs.installer_copy_evidence)
+        with:
+          name: installer-evidence
+          # Keep receipts/commands/logs and the actual tiny STL, not multi-GB cloned/CAD/cache environments.
+          path: |
+            ${{ runner.temp }}/installer-evidence/*/*.json
+            ${{ runner.temp }}/installer-evidence/*/*.stdout
+            ${{ runner.temp }}/installer-evidence/*/*.stderr
+            ${{ runner.temp }}/installer-evidence/*/*.toml
+            ${{ runner.temp }}/installer-evidence/*/*.ps1
+            ${{ runner.temp }}/installer-evidence/*/home/windows-box.stl
+          if-no-files-found: error
+
+  # Supply chain (tools/resource_audit.py, skills/cad-supply-chain/SKILL.md, docs/practice/supply-chain.md): offline checks only,
+  # so the network can never make it flaky (the weekly supply-chain.yml runs the online ones). Not a required check, and
+  # it never blocks a release:
+  # - every event: no high or critical finding anywhere in the checkout;
+  # - into dev (a PR's base, or a push's branch), where new items enter: no medium finding on what the change adds, and
+  #   on a PR a report row in the description for each added dependency, vendored file or catalogue entry;
+  # - into main (a dev -> main release PR, the push after it): the whole-checkout check only. Every item there came
+  #   through a PR into dev that this job judged; "added since main" would be everything since the last release.
+  # It runs the PR's own copy of the tool and of docs/research/security-accepted.yaml, so it is an honesty check, not a
+  # security boundary: a reviewer reads changes to those files (the skill says so).
+  supply-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        # depth 2: on a PR the checkout is the merge commit, whose first parent is the base branch
+        with: {fetch-depth: 2, persist-credentials: false}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with: {python-version: '3.12'}
+      - run: pip install pyyaml        # the tool is stdlib plus pyyaml
+      - name: Gate what this change adds
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          INTO: ${{ github.base_ref || github.ref_name }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            python3 tools/resource_audit.py gate --base HEAD^1 --into "$INTO" --pr-body-env PR_BODY
+          else
+            python3 tools/resource_audit.py gate --base HEAD^1 --into "$INTO"
+          fi

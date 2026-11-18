@@ -1,0 +1,1567 @@
+"""The supply-chain report in tools/resource_audit.py (#117): offline checks on a fixture checkout, online checks
+against recorded answers (no network), the PR gate in a scratch git repository, and the weekly issue plan."""
+import hashlib
+import importlib.util
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+_spec = importlib.util.spec_from_file_location("resource_audit", ROOT / "tools" / "resource_audit.py")
+ra = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(ra)
+
+AS_OF = ra.dt.date(2026, 10, 31)
+SHA = "a" * 40
+MIT = "MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\n"
+APACHE = "                                 Apache License\n                           Version 2.0, January 2004\n"
+
+
+def write(root, rel, text):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(text) if isinstance(text, bytes) else p.write_text(text)
+    return p
+
+
+def lock(packages):
+    return json.dumps({"name": "x", "lockfileVersion": 3, "packages": {
+        "": {"name": "x", "devDependencies": {"marked": "16.4.1"}}, **packages}})
+
+
+def good_pkg(name, version, **kw):
+    return {f"node_modules/{name}": {"version": version, "resolved": f"https://registry.npmjs.org/{name}/-/{name}-{version}.tgz",
+                                     "integrity": "sha512-abc", "license": "MIT", "dev": True, **kw}}
+
+
+def checkout(root: Path):
+    """A small, clean checkout: every offline check passes on it."""
+    write(root, "pyproject.toml", '[project]\nname = "x"\ndependencies = ["pyyaml>=6.0", "numpy>=1.24"]  # core\n'
+                                  '[project.optional-dependencies]\ncad = [\n    "cadquery[ocp]>=2.4",  # the kernel\n'
+                                  '    "pillow>=10.0",\n]\ndev = ["pytest"]\n')
+    write(root, "tools/site/package.json", json.dumps({"devDependencies": {"marked": "16.4.1"}}))
+    write(root, "tools/site/package-lock.json", lock(good_pkg("marked", "16.4.1")))
+    write(root, "software/vendor/manifest.json", json.dumps({"projects": [
+        {"name": "tool", "url": "https://github.com/someone/tool", "license": "MIT", "sha": SHA, "imported": "2026-10-24",
+         "report": "software/vendor/reports/tool.md", "exclude": [".github"]}]}))
+    write(root, "software/vendor/tool/LICENSE", MIT)
+    write(root, "software/vendor/tool/src/a.py", "print('a')\n")
+    write(root, "software/vendor/tool/skills/x/SKILL.md", "---\nname: x\n---\n")
+    write(root, "software/vendor/baselines/tool.json", json.dumps({"project": "tool", "sha": SHA, "fingerprints": []}))
+    write(root, "software/vendor/reports/tool.md", "# scan\n")
+    write(root, "software/vendor/THIRD_PARTY_NOTICES.md",
+          "| Project | Licence | Upstream | Pinned commit | Imported |\n|---|---|---|---|---|\n"
+          f"| tool | MIT | https://github.com/someone/tool | `{SHA[:12]}` | 2026-10-24 |\n\n"
+          "## Web kit\n\n| Project | Licence | Version | Licence file in the kit |\n|---|---|---|---|\n"
+          "| Mermaid | MIT | 11.4.1 | `mermaid/LICENSE` |\n")
+    mjs = b"/* mermaid 11.4.1 */"
+    write(root, f"{ra.KIT}/mermaid/mermaid.min.js", mjs)
+    write(root, f"{ra.KIT}/mermaid/LICENSE", MIT)
+    write(root, f"{ra.KIT}/mermaid/SOURCE.json", json.dumps({"package": "mermaid", "version": "11.4.1", "files": {
+        "mermaid.min.js": hashlib.sha256(mjs).hexdigest(), "LICENSE": hashlib.sha256(MIT.encode()).hexdigest()}}))
+    write(root, f"{ra.KIT}/file-viewer-sources.json", "{}")
+    write(root, "software/vendor/upstreams/registry.yaml", "- name: someone/tool\n  url: https://github.com/someone/tool\n  license: MIT\n"
+                                           "  last_push: 2026-10-01\n  status: trial\n")
+    write(root, "docs/research/landscape.json", json.dumps({"projects": [], "libraries": [
+        {"name": "gumyr/build123d", "license_spdx": "Apache-2.0", "last_push": "2026-10-23"}], "benchmarks": []}))
+    write(root, "docs/guide.md", "# Guide\n\nSee [the docs](https://docs.someone.dev/x) and https://example.com/demo.\n\n"
+                                 "```bash\ncurl http://localhost:8000/ && uvx --from cadgen==0.7.26 cadgen mcp\n```\n")
+    write(root, ".github/dependabot.yml", "version: 2\nupdates:\n  - package-ecosystem: npm\n  - package-ecosystem: pip\n"
+                                          "  - package-ecosystem: github-actions\n")
+    for source in ra._PAGE_ALIASES:
+        if source.startswith(('.agents/skills/', '.agents/agents/')):
+            write(root, source, "# Current instruction\n")
+    return root
+
+
+def run(root, net=None, **kw):
+    return ra.build(root, AS_OF, net, npm_audit=False, **kw).to_json()
+
+
+def checks(r, severity=None):
+    return {(f["check"], f["subject"]) for f in r["findings"] if severity is None or f["severity"] == severity}
+
+
+# ----------------------------------------------------------------------------------------------------------- parsing
+def test_mini_toml_reads_our_pyproject_like_tomllib():
+    tomllib = pytest.importorskip("tomllib")
+    text = (ROOT / "pyproject.toml").read_text()
+    want, got = tomllib.loads(text)["project"], ra.mini_toml(text)["project"]
+    assert got["dependencies"] == want["dependencies"]
+    assert got["optional-dependencies"] == want["optional-dependencies"]
+
+
+def test_versions_floors_and_lowest_release():
+    assert ra.vkey("1.10.2") > ra.vkey("1.9") > ra.vkey("1.9rc1")
+    assert ra.vkey("0.160.0") > ra.vkey("0.16.0")
+    assert ra.spec_floor(">=3.7,<4") == (">=", "3.7") and ra.spec_floor("") is None and ra.spec_floor("<2") is None
+    releases = {"9.9": [{}], "10.0.0": [{"yanked": True}], "10.0.1": [{}], "10.1.0b1": [{}], "11.0": [{}]}
+    assert ra.lowest_release(releases, (">=", "10.0")) == "10.0.1"            # yanked and pre-releases skipped
+    assert ra.lowest_release(releases, (">", "10.0.1")) == "11.0"
+    assert ra.lowest_release(releases, ("==", "9.9")) == "9.9"
+
+
+@pytest.mark.parametrize("tool,args,pkg", [
+    ("npx", "--yes wrangler@4.86.0 pages deploy", None),
+    ("npx", "-y some-mcp", "some-mcp"),
+    ("npx", "pkg@latest", "pkg@latest"),
+    ("uvx", "--no-config --python 3.13 --from cadgen==0.7.26 cadgen mcp", None),
+    ("uvx", "kicad-mcp-pro", "kicad-mcp-pro"),
+    ("uvx", "kicad-mcp-pro@4.4.0", None),
+    ("npx", "--no-install playwright install chromium", None),     # runs the lockfile's copy, never installs (#151)
+    ("npx", "--no playwright install chromium", None),
+    ("bunx", "--no-install playwright install", "playwright"),      # only npx is known to refuse
+    ("uvx", "ruff==0.6.0 check", None),
+    ("pipx run", "./local.py", None),
+])
+def test_unpinned_runner(tool, args, pkg):
+    assert ra.unpinned_runner(tool, args) == pkg
+
+
+def test_urls_in_code_are_not_links_and_parentheses_stay():
+    text = "A [paper](https://a.org/x%20(1).pdf).\n\n`https://in.code/x`\n\n```\nhttps://fenced.org/\n```\n"
+    assert [u for _, u in ra.prose_urls(text)] == ["https://a.org/x%20(1).pdf"]
+
+
+# ----------------------------------------------------------------------------------------------------------- offline
+def test_clean_checkout_has_nothing_above_info(tmp_path):
+    r = run(checkout(tmp_path))
+    assert [f for f in r["findings"] if f["severity"] != "info"] == [], r["findings"]
+    ids = {row["id"] for rows in r["inventory"].values() for row in rows}
+    assert {"pypi:cadquery", "pypi:pyyaml", "npm:marked", "vendor:tool", "webkit:mermaid",
+            "url:https://github.com/someone/tool", "url:https://docs.someone.dev/x"} <= ids
+    assert "url:https://example.com/demo" not in ids and not any("localhost" in i for i in ids)
+    assert r["mode"] == "offline" and r["limits"]
+
+
+def test_offline_checks_find_planted_problems(tmp_path):
+    root = checkout(tmp_path)
+    write(root, "pyproject.toml", '[project]\ndependencies = ["pyyaml"]\n')
+    write(root, "tools/site/package-lock.json", lock({
+        **good_pkg("marked", "16.4.1"),
+        **good_pkg("evil", "1.0.0", resolved="http://mirror.invalid/evil.tgz"),
+        **good_pkg("fsevents", "2.3.2", hasInstallScript=True, os=["darwin"], optional=True),
+        "node_modules/nohash": {"version": "1.0.0", "resolved": "https://registry.npmjs.org/nohash/-/nohash-1.0.0.tgz"}}))
+    write(root, "tools/site/package.json", json.dumps({"devDependencies": {"marked": "^16.4.1"}}))
+    man = json.loads((root / "software/vendor/manifest.json").read_text())
+    man["projects"][0].update(sha="abc123", license="Apache-2.0")
+    write(root, "software/vendor/manifest.json", json.dumps(man))
+    write(root, "software/vendor/stray/x.py", "x = 1\n")                                    # not in the manifest
+    write(root, f"{ra.KIT}/mermaid/mermaid.min.js", b"/* mermaid 11.4.1, edited */")   # no longer the recorded file
+    write(root, f"{ra.KIT}/fonts/inter.woff2", b"\x00font")                       # no recorded hash
+    write(root, "docs/guide.md", "# Guide\n\nThe [solver](http://www.dhondt.de/).\n\n"
+                                 "Install: `claude plugin marketplace add someone/tool#latest` or `curl -fsSL https://x.sh | sh`.\n\n"
+                                 "```\nnpx -y some-mcp\n```\n")
+    r = run(root)
+    high, medium, low = checks(r, "high"), checks(r, "medium"), checks(r, "low")
+    assert {("npm-foreign-source", "npm:evil"), ("vendor-pin", "vendor:tool"), ("vendor-unrecorded", "vendor:stray"),
+            ("webkit-hash", "webkit:mermaid")} <= high
+    assert {("npm-install-script", "npm:fsevents"), ("npm-integrity", "npm:nohash"), ("npm-lock-out-of-sync", "npm:marked"),
+            ("vendor-licence-mismatch", "vendor:tool"), ("vendor-baseline", "vendor:tool"), ("vendor-notices", "vendor:tool"),
+            ("link-not-https", "url:http://www.dhondt.de/"), ("install-from-registry", "doc:docs/guide.md"),
+            ("install-pipe-to-shell", "doc:docs/guide.md")} <= medium
+    assert {("py-no-floor", "pypi:pyyaml"), ("npm-range", "npm:marked"), ("webkit-unhashed", "webkit:fonts"),
+            ("install-unpinned", "doc:docs/guide.md"), ("npm-no-licence", "npm:nohash")} <= low
+    assert ra.failing(r, "high") and not ra.failing(r, "none")
+
+
+def test_an_install_script_finding_is_per_version(tmp_path):
+    """An acceptance names a fingerprint; a new version of the package (a new script to read) must get a new one."""
+    def fp(version):
+        root = checkout(tmp_path / version)
+        write(root, "tools/site/package-lock.json", lock({**good_pkg("marked", "16.4.1"),
+                                               **good_pkg("fsevents", version, hasInstallScript=True, os=["darwin"], optional=True)}))
+        return next(f["fp"] for f in run(root)["findings"] if f["check"] == "npm-install-script")
+    assert fp("2.3.2") == fp("2.3.2") != fp("2.3.3")
+
+
+def test_missing_licence_file_and_kit_licence(tmp_path):
+    root = checkout(tmp_path)
+    (root / "software/vendor/tool/LICENSE").unlink()
+    (root / f"{ra.KIT}/mermaid/LICENSE").unlink()
+    r = run(root)
+    assert ("vendor-no-licence", "vendor:tool") in checks(r, "high")
+    assert ("webkit-licence-missing", "webkit:mermaid") in checks(r, "medium")
+    assert ("webkit-hash-missing", "webkit:mermaid") in checks(r, "high")      # recorded in SOURCE.json, now gone
+
+
+def test_accepted_findings_do_not_fail(tmp_path):
+    root = checkout(tmp_path)
+    write(root, "software/vendor/stray/x.py", "x = 1\n")
+    accepted = [{"check": "vendor-unrecorded", "subject": "vendor:stray", "reason": "fixture", "accepted": "2026-10-31"}]
+    r = ra.build(root, AS_OF, None, npm_audit=False, accepted=accepted).to_json()
+    f = next(f for f in r["findings"] if f["check"] == "vendor-unrecorded")
+    assert f["accepted"].startswith("fixture") and not ra.failing(r, "high") and r["summary"]["accepted"] == 1
+
+
+def test_report_is_deterministic_and_markdown_is_one_page(tmp_path):
+    root = checkout(tmp_path)
+    write(root, "docs/guide.md", "# G\n\nA [b|c](http://www.dhondt.de/).\n")
+    a, b = run(root), run(root)
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+    md = ra.to_markdown(a)
+    assert md.count("\n# ") + md.startswith("# ") == 1 and "<strong>Limits.</strong>" in md and "pie showData" in md
+    assert "`www.dhondt.de`" in md and "`url:http://www.dhondt.de/`" in md      # flagged links stay unlinked on the site
+    assert "/home/" not in md and str(tmp_path) not in json.dumps(a)
+
+
+def test_repo_offline_report_has_no_high_findings():
+    """What CI's supply-chain job enforces on the whole checkout: nothing high or critical, offline."""
+    r = ra.build(ROOT, AS_OF, None, npm_audit=False, accepted=ra.load_accepted(ROOT / ra.ACCEPTED)).to_json()
+    assert not ra.failing(r, "high"), [(f["check"], f["subject"], f["title"]) for f in ra.failing(r, "high")]
+    assert r["inventory"]["vendored"] and r["inventory"]["webkit"] and len(r["inventory"]["links"]) > 50
+
+
+# ------------------------------------------------------------------------------------------------------------ online
+DOWN = object()          # a recorded answer that never came (time-out)
+
+
+class FakeNet(ra.Net):
+    """Recorded answers instead of the network: http[url] -> JSON (or DOWN), files[url] -> bytes, gh[path] -> JSON,
+    probes[url] -> (chain, error)."""
+
+    def __init__(self, http=None, gh=None, probes=None, osv=None, files=None):
+        super().__init__(workers=2)
+        self.token = self.gh = None
+        self.http, self.ghr, self.probes, self.osv, self.files = http or {}, gh or {}, probes or {}, osv, files or {}
+
+    def json(self, url, data=None, headers=None):
+        if url.endswith("/querybatch"):
+            if self.osv is None:
+                return 0, None, "timed out"
+            return 200, {"results": [{"vulns": [{"id": i} for i in self.osv(q)]} for q in data["queries"]]}, ""
+        v = self.http.get(url)
+        return (404, None, "") if v is None else (0, None, "timed out") if v is DOWN else (200, v, "")
+
+    def request(self, url, data=None, headers=None):
+        v = self.files.get(url)
+        return (404, b"", "") if v is None else (200, v, "")
+
+    def github(self, path):
+        v = self.ghr.get(path)
+        return (404, {"message": "Not Found"}, "") if v is None else (200, v, "")
+
+    def graphql(self, query):
+        return 0, None, "offline"
+
+    def probe(self, url):
+        return self.probes.get(url, ([], "timed out"))
+
+
+def vuln(vid, severity="HIGH", fixed="2.0.0", eco="npm", name="marked"):
+    return {"id": vid, "summary": f"{vid} summary", "aliases": [], "database_specific": {"severity": severity},
+            "affected": [{"package": {"ecosystem": eco, "name": name}, "ranges": [{"type": "ECOSYSTEM", "events": [
+                {"introduced": "0"}, {"fixed": fixed}]}]}]}
+
+
+def repo(full_name, **kw):
+    return {"full_name": full_name, "archived": False, "disabled": False, "license": {"spdx_id": "MIT"},
+            "pushed_at": "2026-10-20T00:00:00Z", "default_branch": "main", "stargazers_count": 1, **kw}
+
+
+def online_net(tmp_path, **over):
+    tool_tree = {"tree": [
+        {"path": "LICENSE", "type": "blob", "mode": "100644", "sha": ra.git_blob_sha(MIT.encode())},
+        {"path": "src/a.py", "type": "blob", "mode": "100644", "sha": ra.git_blob_sha(b"print('upstream')\n")},
+        {"path": "skills/x/SKILL.md", "type": "blob", "mode": "100644", "sha": ra.git_blob_sha(b"---\nname: x\n---\n")},
+        {"path": ".github/ci.yml", "type": "blob", "mode": "100644", "sha": "0" * 40},       # excluded in the manifest
+        {"path": "docs/new.md", "type": "blob", "mode": "100644", "sha": "1" * 40}]}            # not vendored, not excluded
+    gh = {"repos/someone/tool": repo("someone/tool"), "repos/gumyr/build123d": repo("gumyr/build123d", archived=True, license={"spdx_id": "GPL-3.0"}),
+          f"repos/someone/tool/git/trees/{SHA}?recursive=1": tool_tree,
+          f"repos/someone/tool/compare/{SHA}...main": {"ahead_by": 3},
+          "repos/someone/tool/security-advisories?state=published&per_page=100": [],
+          "repos/mermaid-js/mermaid": repo("mermaid-js/mermaid")}
+    gh.update(over.pop("gh", {}))
+    http = {"https://pypi.org/pypi/pyyaml/json": {"info": {"version": "6.0.3", "license": "MIT", "classifiers": []},
+                                                    "releases": {"6.0": [{"upload_time": "2021-10-13T00:00:00"}],
+                                                                 "6.0.3": [{"upload_time": "2025-09-25T00:00:00"}]}},
+            "https://pypi.org/pypi/pillow/json": {"info": {"version": "12.0.0", "license_expression": "MIT-CMU", "classifiers": []},
+                                                    "releases": {"10.0.0": [{"upload_time": "2023-07-01T00:00:00"}],
+                                                                 "12.0.0": [{"upload_time": "2026-10-01T00:00:00"}]}},
+            f"{ra.OSV}/vulns/GHSA-aaaa": vuln("GHSA-aaaa", fixed="17.0.0"), f"{ra.OSV}/vulns/MAL-2026-1": vuln("MAL-2026-1", None, name="evil"),
+            f"{ra.OSV}/vulns/GHSA-pill": vuln("GHSA-pill", "CRITICAL", "10.2.0", "PyPI", "pillow"),
+            f"{ra.OSV}/vulns/GHSA-merm": vuln("GHSA-merm", "MODERATE", "11.10.0", name="mermaid")}
+    http.update(over.pop("http", {}))
+
+    def osv(q):
+        p, v = q.get("package", {}), q.get("version")
+        return {("npm", "marked", "16.4.1"): ["GHSA-aaaa"], ("PyPI", "pillow", "10.0.0"): ["GHSA-pill"],
+                ("npm", "mermaid", "11.4.1"): ["GHSA-merm"]}.get((p.get("ecosystem"), p.get("name"), v), [])
+    probes = {"https://docs.someone.dev/x": ([(301, "https://docs.someone.dev/x"), (200, "https://parked.invalid/landing")], "")}
+    return FakeNet(http=http, gh=gh, probes=over.pop("probes", probes), osv=over.pop("osv", osv), files=over.pop("files", {}))
+
+
+def test_online_checks_from_recorded_answers(tmp_path):
+    r = run(checkout(tmp_path), online_net(tmp_path))
+    by = {(f["check"], f["subject"]): f for f in r["findings"]}
+    npm = by[("advisory", "npm:marked")]
+    assert npm["severity"] == "high" and "GHSA-aaaa" in npm["evidence"] and ">=17.0.0" in npm["action"]
+    pil = by[("advisory", "pypi:pillow")]       # only the lowest allowed release is affected, but critically: medium
+    assert pil["severity"] == "medium" and "10.0.0" in pil["title"] and ">=10.2.0" in pil["action"]
+    assert by[("advisory", "webkit:mermaid")]["severity"] == "medium"
+    assert by[("vendor-drift", "vendor:tool")]["severity"] == "high" and "src/a.py" in by[("vendor-drift", "vendor:tool")]["evidence"]
+    assert "docs/new.md" in by[("vendor-incomplete", "vendor:tool")]["evidence"]
+    assert ".github/ci.yml" not in by[("vendor-incomplete", "vendor:tool")]["evidence"]
+    lib = "url:https://github.com/gumyr/build123d"
+    assert by[("repo-archived", lib)]["severity"] == "medium" and by[("licence-changed", lib)]["severity"] == "medium"
+    assert by[("link-redirect-domain", "url:https://docs.someone.dev/x")]["severity"] == "medium"
+    vend = next(v for v in r["inventory"]["vendored"] if v["name"] == "tool")
+    assert vend["behind"] == 3 and vend["drift"]["changed"] == 1
+    assert r["mode"] == "online" and r["sources"]["osv"].startswith("osv.dev")
+
+
+def test_patched_files_are_not_drift(tmp_path):
+    root = checkout(tmp_path)
+    write(root, "software/vendor/patches/tool/0001-x.patch", "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n")
+    r = run(root, online_net(tmp_path))
+    assert ("vendor-drift", "vendor:tool") not in checks(r)
+
+
+def test_malicious_package_is_critical_and_moved_or_gone_repos(tmp_path):
+    root = checkout(tmp_path)
+    write(root, "tools/site/package-lock.json", lock({**good_pkg("marked", "16.4.1"), **good_pkg("evil", "1.0.0")}))
+    write(root, "software/vendor/upstreams/registry.yaml", "- name: a/moved\n  url: https://github.com/a/moved\n  license: MIT\n"
+                                           "- name: a/gone\n  url: https://github.com/a/gone\n  license: MIT\n")
+
+    def osv(q):
+        return ["MAL-2026-1"] if q.get("package", {}).get("name") == "evil" else []
+    r = run(root, online_net(tmp_path, osv=osv, gh={"repos/a/moved": repo("b/moved")}))
+    by = {(f["check"], f["subject"]): f for f in r["findings"]}
+    assert by[("advisory", "npm:evil")]["severity"] == "critical" and "Malicious" in by[("advisory", "npm:evil")]["action"]
+    assert by[("repo-moved", "url:https://github.com/a/moved")]["severity"] == "medium"
+    assert by[("repo-gone", "url:https://github.com/a/gone")]["severity"] == "high"
+
+
+def test_network_failures_are_info_never_failures(tmp_path):
+    """No answer from OSV, PyPI, GitHub or a site: reported as not verified, and the exit code does not change."""
+    class Down(FakeNet):
+        def json(self, url, data=None, headers=None):
+            return 0, None, "timed out"
+
+        def github(self, path):
+            return 0, None, "timed out"
+    r = run(checkout(tmp_path), Down(osv=None))
+    assert not ra.failing(r, "low"), ra.failing(r, "low")
+    assert ("osv-unverified", "osv.dev") in checks(r, "info") and r["sources"]["osv"].startswith("not verified")
+    assert any(f["check"] == "link-unverified" for f in r["findings"])
+
+
+# -------------------------------------------------------------------------------------------------------------- gate
+def git(root, *args):
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+@pytest.fixture
+def repo_with_base(tmp_path):
+    root = checkout(tmp_path / "r")
+    git(root, "init", "-q", "-b", "dev")
+    # Every commit in this disposable repository needs an identity, including
+    # checkpoints made by a test after the fixture's initial commit.
+    git(root, "config", "--local", "user.email", "audit-test@example.invalid")
+    git(root, "config", "--local", "user.name", "Audit test")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    return root
+
+
+def gate(root, body=None, extra=()):
+    args = ["gate", "--root", str(root), "--base", "HEAD", "--as-of", "2026-10-31", "--no-npm-audit", *extra]
+    if body is not None:
+        f = root.parent / "body.md"
+        f.write_text(body)
+        args += ["--pr-body-file", str(f)]
+    return ra.main(args)
+
+
+def test_gate_needs_a_row_for_each_added_item(repo_with_base, capsys):
+    root = repo_with_base
+    assert gate(root, "") == 0                                        # nothing added
+    text = (root / "pyproject.toml").read_text().replace('dev = ["pytest"]', 'dev = ["pytest"]\nexplore = ["optuna>=3.4"]')
+    write(root, "pyproject.toml", text)
+    write(root, "software/vendor/upstreams/registry.yaml", (root / "software/vendor/upstreams/registry.yaml").read_text() +
+          "- name: new/thing\n  url: https://github.com/new/thing\n  license: MIT\n  status: candidate\n")
+    write(root, f"{ra.KIT}/fonts/new.woff2", b"\x00")
+    assert gate(root, "no rows here") == 1
+    out = capsys.readouterr().out
+    assert "pypi:optuna" in out and "url:https://github.com/new/thing" in out and "webkit:fonts" in out
+    ids, _ = ra.added_items(root, "HEAD")
+    assert ids == ["pypi:optuna", "url:https://github.com/new/thing", "webkit:fonts"]
+    rows = "| `pypi:optuna` |\n| `url:https://github.com/new/thing` |\n| `webkit:fonts` |"
+    assert gate(root, rows) == 1                                      # the new font has no recorded hash (medium)
+    assert "new vendored files in fonts have no recorded hash" in capsys.readouterr().out
+    assert gate(root, rows, ["--fail-on", "high"]) == 0
+    assert ra.main(["rows", "--root", str(root), "--base", "HEAD", "--no-npm-audit"]) == 0
+    assert "| `pypi:optuna` | Python dependency (explore) | >=3.4 |" in capsys.readouterr().out
+
+
+def test_gate_fails_on_a_high_finding_anywhere(repo_with_base, capsys):
+    write(repo_with_base, "software/vendor/stray/x.py", "x = 1\n")
+    assert gate(repo_with_base, "| `vendor:stray` |", ["--fail-on", "critical"]) == 1
+    assert "software/vendor/stray is not in software/vendor/manifest.json" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", ["unexpected.py", "nested/unexpected.py", ".hidden", "nested/.hidden"])
+@pytest.mark.parametrize("staged", [False, True])
+def test_owned_metadata_does_not_hide_unrecorded_code(repo_with_base, name, staged):
+    root = repo_with_base
+    assert "vendor:upstreams" not in ra.item_ids(ra.WorkTree(root))
+    write(root, f"software/vendor/upstreams/{name}", "unexpected content\n")
+    if staged:
+        git(root, "add", "--all")
+    assert ("vendor-unrecorded", "vendor:upstreams") in checks(run(root), "high")
+    assert "vendor:upstreams" in ra.item_ids(ra.WorkTree(root))
+    assert "vendor:upstreams" in ra.added_items(root, "HEAD")[0]
+
+
+def test_registry_move_keeps_historical_dependency_identity(repo_with_base):
+    root = repo_with_base
+    # Reconstruct a pre-move base commit, then make the real layout change.
+    (root / "upstreams").mkdir()
+    git(root, "mv", ra.REGISTRY, "upstreams/registry.yaml")
+    git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "old registry location")
+    before = ra.item_ids(ra.GitTree(root, "HEAD"))
+    (root / "software/vendor/upstreams").mkdir(exist_ok=True)
+    git(root, "mv", "upstreams/registry.yaml", ra.REGISTRY)
+    assert ra.item_ids(ra.WorkTree(root)) == before
+    assert ra.added_items(root, "HEAD")[0] == []
+    assert gate(root, "") == 0
+
+
+def test_registry_reads_prefer_moved_source_and_only_history_can_fall_back(repo_with_base):
+    root = repo_with_base
+    write(root, "upstreams/registry.yaml", "- name: stale/old\n  url: https://github.com/stale/old\n")
+    git(root, "add", "--all")
+    git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "both locations")
+    for tree in (ra.WorkTree(root), ra.GitTree(root, "HEAD")):
+        assert "url:https://github.com/stale/old" not in ra.item_ids(tree)
+    assert not any(e["name"] == "stale/old" for e in ra.catalogue_entries(root))
+    (root / ra.REGISTRY).unlink()
+    with pytest.raises(FileNotFoundError, match="registry"):
+        ra.catalogue_entries(root)
+    with pytest.raises(FileNotFoundError, match="registry"):
+        ra.item_ids(ra.WorkTree(root))
+
+
+def test_landscape_move_keeps_historical_identity_but_cannot_hide_a_missing_current_source(repo_with_base):
+    root = repo_with_base
+    (root / "research").mkdir()
+    git(root, "mv", ra.LANDSCAPE, "research/landscape.json")
+    git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "legacy landscape path")
+    before = ra.item_ids(ra.GitTree(root, "HEAD"))
+    git(root, "mv", "research/landscape.json", ra.LANDSCAPE)
+    assert ra.item_ids(ra.WorkTree(root)) == before
+    assert ra.added_items(root, "HEAD")[0] == []
+    write(root, "research/landscape.json", '{"projects":[{"name":"stale/old","url":"https://github.com/stale/old"}]}')
+    assert "url:https://github.com/stale/old" not in ra.item_ids(ra.WorkTree(root))
+    (root / ra.LANDSCAPE).unlink()
+    with pytest.raises(FileNotFoundError, match="landscape"):
+        ra.catalogue_entries(root)
+    with pytest.raises(FileNotFoundError, match="landscape"):
+        ra.item_ids(ra.WorkTree(root))
+
+
+def test_missing_moved_notices_cannot_use_stale_root_copy(tmp_path):
+    root = checkout(tmp_path)
+    (root / "software/vendor/THIRD_PARTY_NOTICES.md").rename(root / "THIRD_PARTY_NOTICES.md")
+    assert ("vendor-notices", "vendor:tool") in checks(run(root), "medium")
+
+
+
+def test_software_move_keeps_historical_ids_and_requires_current_vendor_sources(repo_with_base):
+    """Real old-tree comparison keeps identities; stale old code cannot replace a missing live owner."""
+    root = repo_with_base
+    git(root, "mv", "software/vendor", "vendor")
+    (root / "src/cadagent/webkit").mkdir(parents=True)
+    git(root, "mv", ra.KIT, "src/cadagent/webkit/vendor")
+    git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "previous software locations")
+    before = ra.item_ids(ra.GitTree(root, "HEAD"))
+    assert {"vendor:tool", "webkit:mermaid"} <= before
+    git(root, "mv", "vendor", "software/vendor")
+    git(root, "mv", "src/cadagent/webkit/vendor", ra.KIT)
+    assert ra.item_ids(ra.WorkTree(root)) == before
+    assert ra.added_items(root, "HEAD")[0] == []
+    # A stale old registry, manifest and kit are never current audit inputs.
+    write(root, "vendor/manifest.json", '{"projects":[{"name":"stale"}]}')
+    write(root, "vendor/upstreams/registry.yaml", "- name: stale/old\n  url: https://github.com/stale/old\n")
+    write(root, "src/cadagent/webkit/vendor/stale/unused.js", "stale\n")
+    git(root, "add", "--all")
+    git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "both software locations")
+    for tree in (ra.WorkTree(root), ra.GitTree(root, "HEAD")):
+        assert ra.item_ids(tree) == before
+    (root / ra.REGISTRY).unlink()
+    with pytest.raises(FileNotFoundError, match="registry"):
+        ra.item_ids(ra.WorkTree(root))
+
+def test_npm_move_keeps_historical_ids_and_live_reads_reject_stale_roots(repo_with_base):
+    root = repo_with_base
+    for current in (ra.NPM_PACKAGE, ra.NPM_LOCK):
+        git(root, "mv", current, Path(current).name)
+    git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "legacy npm ownership")
+    before = ra.item_ids(ra.GitTree(root, "HEAD"))
+    assert "npm:marked" in before
+    for current in (ra.NPM_PACKAGE, ra.NPM_LOCK):
+        git(root, "mv", Path(current).name, current)
+    assert ra.item_ids(ra.WorkTree(root)) == before
+    assert ra.added_items(root, "HEAD")[0] == []
+    write(root, "package.json", '{"devDependencies":{"stale":"1.0.0"}}')
+    write(root, "package-lock.json", lock(good_pkg("stale", "1.0.0")))
+    git(root, "add", "--all")
+    git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "current and stale npm inputs")
+    for tree in (ra.WorkTree(root), ra.GitTree(root, "HEAD")):
+        assert ra.item_ids(tree) == before
+    assert {p["name"] for p in run(root)["inventory"]["npm"]} == {"marked"}
+    (root / ra.NPM_LOCK).unlink()
+    assert ("npm-no-lockfile", "npm:package-lock.json") in checks(run(root), "high")
+    with pytest.raises(FileNotFoundError, match="current npm lockfile"):
+        ra.item_ids(ra.WorkTree(root))
+    (root / ra.NPM_PACKAGE).unlink()
+    with pytest.raises(FileNotFoundError, match="current npm manifest"):
+        run(root)
+
+
+def test_npm_audit_executes_in_the_current_package_context(tmp_path, monkeypatch):
+    root = checkout(tmp_path / "checkout with spaces")
+    npm = tmp_path / "fake-npm"
+    npm.write_text('#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > audit-invocation.txt\n'
+                   'printf \'{"vulnerabilities":{}}\\n\'\n')
+    npm.chmod(0o755)
+    monkeypatch.setattr(ra.shutil, "which", lambda name: str(npm) if name == "npm" else None)
+    rep = ra.Report(root, AS_OF, False)
+    assert ra.run_npm_audit(rep) == {}
+    assert (root / ra.NPM_DIR / "audit-invocation.txt").read_text().splitlines() == [
+        str(root / ra.NPM_DIR), "audit", "--package-lock-only", "--json"]
+    assert rep.sources["npm-audit"] == "npm audit --package-lock-only"
+
+
+def rebuild_context(root, name="renderer-build", version="1.0.0", **fields):
+    directory = ra.NPM_REBUILD_DIR
+    write(root, f"{directory}/package.json", json.dumps({"devDependencies": {name: version}}))
+    write(root, f"{directory}/package-lock.json", json.dumps({"lockfileVersion": 3, "packages": {
+        "": {"devDependencies": {name: version}}, **good_pkg(name, version, **fields)}}))
+
+
+def test_renderer_rebuild_context_is_audited_and_its_faults_still_block(tmp_path):
+    root = checkout(tmp_path)
+    rebuild_context(root)
+    report = run(root)
+    assert {(p["name"], p["manifest"]) for p in report["inventory"]["npm"]} == {
+        ("marked", "tools/site/package.json"), ("renderer-build", "tools/mermaid/package.json")}
+    assert report["extra"]["npm_counts"] == {"direct": 2, "with_transitive": 2}
+    rebuild_context(root, resolved="https://foreign.invalid/build.tgz", integrity="", hasInstallScript=True)
+    findings = checks(run(root))
+    assert {("npm-foreign-source", "npm:renderer-build"), ("npm-integrity", "npm:renderer-build"),
+            ("npm-install-script", "npm:renderer-build")} <= findings
+
+
+def test_renderer_rebuild_dependencies_need_pr_rows(repo_with_base):
+    root = repo_with_base
+    rebuild_context(root)
+    git(root, "add", ra.NPM_REBUILD_DIR)
+    assert "npm:renderer-build" in ra.added_items(root, "HEAD")[0]
+    assert "| `npm:renderer-build` |" in ra.rows_markdown(run(root), ["npm:renderer-build"])
+
+
+def test_scada_maintenance_context_is_audited_and_missing_lock_cannot_hide(repo_with_base):
+    root = repo_with_base
+    directory = ra.NPM_SCADA_DIR
+    write(root, f"{directory}/package.json", json.dumps({"devDependencies": {"scada-build": "1.0.0"}}))
+    write(root, f"{directory}/package-lock.json", json.dumps({"lockfileVersion": 3, "packages": {
+        "": {"devDependencies": {"scada-build": "1.0.0"}},
+        **good_pkg("scada-build", "1.0.0", hasInstallScript=True)}}))
+    git(root, "add", directory)
+    report = run(root)
+    assert ("npm-install-script", "npm:scada-build") in checks(report, "medium")
+    assert any(row["manifest"] == f"{directory}/package.json" for row in report["inventory"]["npm"])
+    assert "npm:scada-build" in ra.added_items(root, "HEAD")[0]
+    (root / directory / "package-lock.json").unlink()
+    assert ("npm-no-lockfile", f"npm:{directory}/package-lock.json") in checks(run(root), "high")
+    with pytest.raises(FileNotFoundError, match="tools/webkit/scada/package-lock.json"):
+        ra.item_ids(ra.WorkTree(root))
+
+
+def test_existing_npm_name_cannot_hide_a_new_context_or_changed_pin(repo_with_base):
+    root = repo_with_base
+    directory = ra.NPM_SCADA_DIR
+    write(root, f'{directory}/package.json', json.dumps({'devDependencies': {'marked': '99.0.0'}}))
+    write(root, f'{directory}/package-lock.json', lock(good_pkg('marked', '99.0.0')))
+    git(root, 'add', directory)
+    assert 'npm:marked' in ra.added_items(root, 'HEAD')[0]
+    table = ra.rows_markdown(run(root), ['npm:marked'])
+    assert '16.4.1 (tools/site/package.json)' in table
+    assert '99.0.0 (tools/webkit/scada/package.json)' in table
+    git(root, 'commit', '-m', 'add second locked context')
+    assert 'npm:marked' not in ra.added_items(root, 'HEAD')[0]
+    write(root, f'{directory}/package-lock.json', lock(good_pkg('marked', '99.0.1')))
+    assert 'npm:marked' in ra.added_items(root, 'HEAD')[0]
+
+
+def test_capture_python_context_is_inventory_and_changed_pins_require_rows(repo_with_base):
+    root = repo_with_base
+    directory, requirements = ra.NPM_SCADA_DIR, ra.PYTHON_MAINTAINER_REQUIREMENTS[0]
+    write(root, f'{directory}/package.json', '{}')
+    write(root, f'{directory}/package-lock.json', '{"lockfileVersion":3,"packages":{}}')
+    write(root, f'{directory}/ui/README.md', '# Capture tools\n')
+    write(root, requirements, '# Capture only\nplaywright==1.62.0\nPillow==13.0.0\n')
+    git(root, 'add', directory)
+    rows = {row['id']: row for row in run(root)['inventory']['python']}
+    assert rows['pypi:playwright']['range'] == {requirements: '==1.62.0'}
+    assert rows['pypi:pillow']['range'][requirements] == '==13.0.0'
+    assert {'pypi:playwright', 'pypi:pillow'} <= set(ra.added_items(root, 'HEAD')[0])
+    git(root, 'commit', '-m', 'add capture tools')
+    write(root, requirements, 'playwright==1.63.0\nPillow==13.0.0\n')
+    assert 'pypi:playwright' in ra.added_items(root, 'HEAD')[0]
+    write(root, requirements, 'playwright>=1.63.0\n')
+    with pytest.raises(ValueError, match='exact name==X.Y.Z'):
+        run(root)
+    (root / requirements).unlink()
+    with pytest.raises(FileNotFoundError, match='required current Python requirements'):
+        run(root)
+
+
+def test_capture_exact_pin_is_advisory_checked_even_between_package_floor_and_latest(tmp_path):
+    root = checkout(tmp_path)
+    requirements = ra.PYTHON_MAINTAINER_REQUIREMENTS[0]
+    write(root, requirements, 'Pillow==11.0.0\n')
+    queries = []
+    def osv(query):
+        queries.append(query)
+        return ['GHSA-capture'] if query['package']['name'] == 'pillow' and query['version'] == '11.0.0' else []
+    net = online_net(tmp_path, osv=osv,
+        http={f'{ra.OSV}/vulns/GHSA-capture': vuln('GHSA-capture', 'HIGH', '11.1.0', 'PyPI', 'pillow')})
+    rep = ra.Report(root, AS_OF, True)
+    ra.check_python(rep, net)
+    row = next(row for row in rep.inventory['python'] if row['name'] == 'pillow')
+    assert row['pins'] == ['11.0.0']
+    assert any(q['version'] == '11.0.0' for q in queries)
+    finding = next(f for f in rep.findings if f['check'] == 'advisory')
+    assert finding['severity'] == 'high' and '11.0.0 in the lockfile' in finding['title']
+
+
+@pytest.mark.parametrize("missing", ["package.json", "package-lock.json"])
+def test_missing_renderer_inputs_cannot_use_the_site_or_stale_root(tmp_path, missing):
+    root = checkout(tmp_path)
+    rebuild_context(root)
+    write(root, missing, (root / ra.NPM_REBUILD_DIR / missing).read_text())
+    (root / ra.NPM_REBUILD_DIR / missing).unlink()
+    if missing == "package.json":
+        with pytest.raises(FileNotFoundError, match="tools/mermaid/package.json"):
+            run(root)
+    else:
+        assert ("npm-no-lockfile", "npm:tools/mermaid/package-lock.json") in checks(run(root), "high")
+    with pytest.raises(FileNotFoundError, match="tools/mermaid/"):
+        ra.item_ids(ra.WorkTree(root))
+
+
+def test_npm_audit_executes_in_the_separate_renderer_context(tmp_path, monkeypatch):
+    root = checkout(tmp_path / "checkout with spaces")
+    rebuild_context(root)
+    npm = tmp_path / "fake-npm"
+    npm.write_text('#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > audit-invocation.txt\n'
+                   'printf \'{"vulnerabilities":{}}\\n\'\n')
+    npm.chmod(0o755)
+    monkeypatch.setattr(ra.shutil, "which", lambda name: str(npm) if name == "npm" else None)
+    rep = ra.Report(root, AS_OF, False)
+    assert ra.run_npm_audit(rep, ra.NPM_REBUILD_DIR) == {}
+    assert (root / ra.NPM_REBUILD_DIR / "audit-invocation.txt").read_text().splitlines() == [
+        str(root / ra.NPM_REBUILD_DIR), "audit", "--package-lock-only", "--json"]
+    assert rep.sources["npm-audit:tools/mermaid"] == "npm audit --package-lock-only"
+    assert not (root / ra.NPM_DIR / "audit-invocation.txt").exists()
+
+
+def test_npm_online_results_do_not_cross_package_contexts(tmp_path, monkeypatch):
+    root = checkout(tmp_path)
+    rebuild_context(root, name="marked", version="99.0.0")
+    calls, queries = [], []
+
+    def recorded_audit(rep, directory):
+        calls.append(directory)
+        return {"marked": [{"id": "TEST-site-only", "severity": "high", "summary": "site fixture",
+                            "fixed": [], "range": ""}]} if directory == ra.NPM_DIR else {}
+
+    monkeypatch.setattr(ra, "run_npm_audit", recorded_audit)
+    net = FakeNet(http={"https://registry.npmjs.org/marked": {
+        "dist-tags": {"latest": "99.0.0"}, "versions": {"16.4.1": {}, "99.0.0": {}}}},
+        osv=lambda q: queries.append(q["version"]) or [])
+    rep = ra.Report(root, AS_OF, True)
+    ra.check_npm(rep, net)
+    assert calls == [ra.NPM_DIR, ra.NPM_REBUILD_DIR]
+    assert queries == ["16.4.1", "99.0.0"]
+    rows = {p["manifest"]: p for p in rep.inventory["npm"]}
+    assert rows["tools/site/package.json"]["advisories"] == ["TEST-site-only"]
+    assert not rows["tools/mermaid/package.json"].get("advisories")
+
+
+@pytest.mark.parametrize("with_rebuild", [False, True])
+def test_real_esbuild_hook_exception_cannot_accept_the_same_version_in_the_site(tmp_path, with_rebuild):
+    root = checkout(tmp_path)
+    package = json.loads((root / ra.NPM_PACKAGE).read_text())
+    package["devDependencies"]["esbuild"] = "0.28.2"
+    write(root, ra.NPM_PACKAGE, json.dumps(package))
+    locked = json.loads((root / ra.NPM_LOCK).read_text())
+    locked["packages"][""]["devDependencies"]["esbuild"] = "0.28.2"
+    locked["packages"].update(good_pkg("esbuild", "0.28.2", hasInstallScript=True))
+    write(root, ra.NPM_LOCK, json.dumps(locked))
+    if with_rebuild:
+        rebuild_context(root, name="esbuild", version="0.28.2", hasInstallScript=True)
+    # Exercise the actual committed policy and production matcher, not a duplicate test exception.
+    report = run(root, accepted=ra.load_accepted(ROOT / ra.ACCEPTED))
+    hooks = [f for f in report["findings"] if f["check"] == "npm-install-script" and f["subject"] == "npm:esbuild"]
+    assert len(hooks) == (2 if with_rebuild else 1)
+    site = [f for f in hooks if "tools/site/package.json:" in f["evidence"]]
+    assert len(site) == 1 and not site[0].get("accepted")
+    assert site[0]["fp"] == "59651950683e8b3f", "retain the existing site identity deliberately"
+    if with_rebuild:
+        producer = [f for f in hooks if "tools/mermaid/package.json:" in f["evidence"]]
+        assert len(producer) == 1 and producer[0].get("accepted")
+        assert producer[0]["fp"] != site[0]["fp"]
+
+
+@pytest.mark.parametrize('context,version,accepted', [
+    ('tools/webkit/scada', '0.25.12', True),
+    ('tools/webkit/scada', '0.25.13', False),
+    ('tools/mermaid', '0.25.12', False),
+    ('tools/site', '0.25.12', False),
+])
+def test_scada_esbuild_hook_acceptance_is_exact_context_and_version(tmp_path, context, version, accepted):
+    root = checkout(tmp_path)
+    write(root, f'{context}/package.json', json.dumps({'devDependencies': {'esbuild': version}}))
+    write(root, f'{context}/package-lock.json', lock(good_pkg('esbuild', version, hasInstallScript=True)))
+    report = run(root, accepted=ra.load_accepted(ROOT / ra.ACCEPTED))
+    hook = next(f for f in report['findings'] if f['check'] == 'npm-install-script' and f['subject'] == 'npm:esbuild')
+    assert bool(hook.get('accepted')) is accepted
+
+
+@pytest.mark.parametrize("change", [None, "context", "version", "integrity", "resolved"])
+def test_real_khroma_licence_exception_is_bound_to_the_read_archive_and_context(tmp_path, change):
+    root = checkout(tmp_path)
+    original = json.loads((ROOT / "tools/mermaid/package-lock.json").read_text())["packages"]["node_modules/khroma"]
+    entry = dict(original)
+    if change == "version":
+        entry["version"] = "2.1.1"
+    if change == "integrity":
+        entry["integrity"] = "sha512-another-archive"
+    if change == "resolved":
+        entry["resolved"] += "?another-source"
+    directory = ra.NPM_DIR if change == "context" else ra.NPM_REBUILD_DIR
+    write(root, f"{directory}/package.json", json.dumps({"dependencies": {"khroma": entry["version"]}}))
+    write(root, f"{directory}/package-lock.json", json.dumps({"lockfileVersion": 3, "packages": {
+        "": {"dependencies": {"khroma": entry["version"]}}, "node_modules/khroma": entry}}))
+    # Production acceptance and matcher: a metadata waiver must not silently cover another input.
+    report = run(root, accepted=ra.load_accepted(ROOT / ra.ACCEPTED))
+    findings = [f for f in report["findings"] if f["check"] == "npm-no-licence" and f["subject"] == "npm:khroma"]
+    assert len(findings) == 1
+    assert bool(findings[0].get("accepted")) is (change is None)
+    assert (findings[0]["fp"] == "f397c726cbcfe457") is (change is None)
+
+
+@pytest.mark.parametrize("change", [None, "version", "bytes"])
+def test_real_old_step_parser_retention_does_not_cover_a_different_runtime(tmp_path, change):
+    root = checkout(tmp_path)
+    receipt = json.loads((ROOT / ra.KIT / ra.VIEWER_RECEIPT).read_text())
+    shutil.copytree(ROOT / ra.KIT / "occt-import-js", root / ra.KIT / "occt-import-js")
+    if change == "version":
+        receipt["occt"]["version"] = "0.0.24"
+    if change == "bytes":
+        rel = "occt-import-js/occt-import-js.js"
+        changed = root / ra.KIT / rel
+        changed.write_bytes(changed.read_bytes() + b"\n// a different recorded runtime\n")
+        receipt["sha256"][rel] = hashlib.sha256(changed.read_bytes()).hexdigest()
+    write(root, f"{ra.KIT}/{ra.VIEWER_RECEIPT}", json.dumps(receipt))
+    net = online_net(tmp_path, gh={"repos/kovacsv/occt-import-js": repo(
+        "kovacsv/occt-import-js", pushed_at="2024-12-03T00:00:00Z", license={"spdx_id": "LGPL-2.1"})})
+    report = run(root, net, accepted=ra.load_accepted(ROOT / ra.ACCEPTED))
+    findings = [f for f in report["findings"] if f["check"] == "repo-stale" and f["subject"] == "webkit:occt-import-js"]
+    assert len(findings) == 1
+    assert bool(findings[0].get("accepted")) is (change is None)
+
+
+def test_dated_report_uses_its_recorded_registry_location(tmp_path):
+    r = run(checkout(tmp_path))
+    assert f"catalog.json, {ra.REGISTRY}, docs/research/landscape.json" in ra.to_markdown(r)
+    r["sources"]["offline"] = r["sources"]["offline"].replace(ra.REGISTRY, "upstreams/registry.yaml")
+    assert "catalog.json, upstreams/registry.yaml, docs/research/landscape.json" in ra.to_markdown(r)
+
+
+# ------------------------------------------------------------------------------------------------------------- issue
+def report_with(*fs):
+    return {"as_of": "2026-10-31", "revision": "f" * 40, "mode": "online", "limits": ["x"], "sources": {},
+            "summary": {**{s: 0 for s in ra.SEVERITIES}, "accepted": 0, "items": {}}, "inventory": {}, "extra": {},
+            "findings": [dict(severity=s, check=c, subject=c, title=c, evidence="", action="", fp=fp) for s, c, fp in fs]}
+
+
+def test_issue_plan_opens_updates_and_leaves_alone():
+    r = report_with(("medium", "repo-archived", "a" * 16), ("info", "link-unverified", "b" * 16))
+    plan, _ = ra.plan_issue(r, [], "o/r", "T")
+    tag = ra.scope_tag("repo-archived")
+    assert [p[0][:2] for p in plan] == [["issue", "create"]] and f"fps={'a' * 16}~{tag} -->" in plan[0][1]
+    mine = {"number": 7, "author": {"login": "app/github-actions"}, "body": f"x\n<!-- cad-supply-chain-report fps={'a' * 16}~{tag} -->"}
+    assert ra.plan_issue(r, [mine], "o/r", "T")[0] == []             # unchanged (info findings do not count)
+    old_style = dict(mine, body=f"x\n<!-- cad-supply-chain-report fps={'a' * 16} -->")   # a marker from before scope tags
+    assert ra.plan_issue(r, [old_style], "o/r", "T")[0] == []
+    r2 = report_with(("medium", "repo-archived", "a" * 16), ("high", "repo-gone", "c" * 16))
+    plan, note = ra.plan_issue(r2, [mine], "o/r", "T")
+    assert [p[0][:3] for p in plan] == [["issue", "edit", "7"], ["issue", "comment", "7"]] and "1 new, 0 resolved" in note
+    spoof = dict(mine, author={"login": "someone"})                 # a marker in someone else's issue is ignored
+    assert ra.plan_issue(r2, [spoof], "o/r", "T")[0][0][0][:2] == ["issue", "create"]
+    plan, _ = ra.plan_issue(report_with(), [mine], "o/r", "T")
+    assert plan[-1][0][:3] == ["issue", "close", "7"]
+
+
+def test_the_weekly_comment_does_not_link_what_it_flags():
+    """A new finding's title can hold the flagged URL or host: the comment shows it as code, never as a link."""
+    old = {"number": 7, "author": {"login": "app/github-actions"}, "body": "x\n<!-- cad-supply-chain-report fps= -->"}
+    r = report_with(("medium", "link-dead", "d" * 16))
+    r["findings"][0].update(subject="url:https://dead.example/x", title="https://dead.example/x is gone (HTTP 404)")
+    plan, _ = ra.plan_issue(r, [old], "o/r", "T")
+    comment = next(body for argv, body in plan if argv[:2] == ["issue", "comment"])
+    assert "`https://dead.example/x` is gone" in comment and "\n- **medium** `url:https://dead.example/x`: `https" in comment
+
+
+# --------------------------------------------------------------------------------- the review of #138, point by point
+def test_release_pr_and_main_push_get_the_whole_repo_check_only(repo_with_base, capsys):
+    """The blocker: into main, what dev gained since the last release is not "what the change adds". It came through
+    PRs into dev, each gated with its rows, so a release PR (no rows) and the push to main (no body) must pass."""
+    root = repo_with_base
+    text = (root / "pyproject.toml").read_text().replace('dev = ["pytest"]', 'dev = ["pytest"]\nexplore = ["optuna>=3.4"]')
+    write(root, "pyproject.toml", text)
+    write(root, f"{ra.KIT}/fonts/new.woff2", b"\x00")             # new, unhashed: medium on a change into dev
+    assert gate(root, "Release v9.9.9: no rows here", ["--into", "main"]) == 0
+    out = capsys.readouterr().out
+    assert "whole-repository check only" in out and "pypi:optuna" not in out
+    assert gate(root, None, ["--into", "main"]) == 0                 # the push to main: no body at all
+    assert gate(root, "no rows here", ["--into", "dev"]) == 1        # the same change into dev is judged
+    assert ra.gate_scope("dev") == "change" and ra.gate_scope("main") == "repo" and ra.gate_scope("feat/x") == "repo"
+    write(root, "software/vendor/stray/x.py", "x = 1\n")                      # a high finding fails everywhere
+    assert gate(root, None, ["--into", "main"]) == 1
+    assert "software/vendor/stray is not in software/vendor/manifest.json" in capsys.readouterr().out
+
+
+def test_ci_job_passes_the_target_branch_and_reads_only():
+    """ci.yml's supply-chain job tells the gate where the change goes (a PR's base, else the pushed branch)."""
+    yaml = pytest.importorskip("yaml")
+    job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["supply-chain"]
+    assert job["permissions"] == {"contents": "read"}
+    step = next(s for s in job["steps"] if "resource_audit.py gate" in s.get("run", ""))
+    assert step["env"]["INTO"] == "${{ github.base_ref || github.ref_name }}"
+    assert step["run"].count('--into "$INTO"') == 2 and "--pr-body-env PR_BODY" in step["run"]
+    weekly = yaml.safe_load((ROOT / ".github/workflows/supply-chain.yml").read_text())
+    assert weekly["permissions"] == {}
+    report, issue = weekly["jobs"]["report"], weekly["jobs"]["issue"]
+    assert report["permissions"] == {"contents": "read"} and issue["permissions"] == {"contents": "read", "issues": "write"}
+    assert issue["needs"] == "report" and "default_branch" in report["if"]
+    runs = [s.get("run", "") for s in report["steps"]]
+    assert any("report --online" in r for r in runs) and not any("--repo" in r for r in runs)   # GITHUB_TOKEN can't read settings
+    assert [s.get("run", "") for s in issue["steps"] if "resource_audit" in s.get("run", "")] == [
+        'python3 tools/resource_audit.py issue --report build/security-report.json --repo "$GITHUB_REPOSITORY" --post']
+    # The job that can write issues runs no package code: no pip, no setup-python (`issue` needs only the stdlib).
+    assert not any("pip" in s.get("run", "") or "setup-python" in s.get("uses", "") for s in issue["steps"])
+
+
+@pytest.mark.parametrize("body,ok", [
+    ("| `pypi:optuna` | Python dependency (explore) | >=3.4 | MIT | no findings |", True),
+    ("  |`pypi:optuna`| row with tight cells |", True),
+    ("We considered `pypi:optuna-dashboard` but dropped it.", False),
+    ("Supply chain: None (pypi:optuna is just a mention)", False),
+    ("| `pypi:optuna-dashboard` | a different package |", False),
+    ("| x | `pypi:optuna` | not the first cell |", False),
+])
+def test_a_row_is_a_table_row_whose_first_cell_is_the_id(body, ok):
+    assert ra.has_row(body, "pypi:optuna") is ok
+
+
+def test_url_ids_that_are_prefixes_need_their_own_row():
+    body = "| `url:https://github.com/a/bc` | catalogue link |"
+    assert ra.has_row(body, "url:https://github.com/a/bc") and not ra.has_row(body, "url:https://github.com/a/b")
+
+
+def test_an_unread_advisory_record_fails_closed(tmp_path):
+    """OSV names an advisory, then its record cannot be read: it must not look milder than the record would."""
+    def osv(q):
+        return ["GHSA-gone"] if q.get("package", {}).get("name") == "marked" else []
+    net = online_net(tmp_path, osv=osv, http={f"{ra.OSV}/vulns/GHSA-gone": DOWN})
+    r = run(checkout(tmp_path), net)
+    f = next(f for f in r["findings"] if f["check"] == "advisory" and f["subject"] == "npm:marked")
+    assert f["severity"] == "high" and "record not read" in f["evidence"] and "No fixed release" not in f["action"]
+    assert "GHSA-gone" in f["action"] and ra.failing(r, "high")
+    note = next(f for f in r["findings"] if f["check"] == "osv-unverified")
+    assert note["severity"] == "info" and "GHSA-gone" in note["evidence"]
+
+
+class BatchNet(FakeNet):
+    """OSV's batch endpoint answers 200 with the given body (queries -> JSON); everything else as FakeNet."""
+
+    def __init__(self, body, **kw):
+        super().__init__(osv=lambda q: [], **kw)
+        self.body = body
+
+    def json(self, url, data=None, headers=None):
+        if url.endswith("/querybatch"):
+            return 200, self.body(data["queries"]), ""
+        return super().json(url, data, headers)
+
+
+@pytest.mark.parametrize("answer,paged", [
+    (lambda qs: {"results": [{"vulns": [{"id": "GHSA-x"}]}]}, False),                 # fewer results than queries
+    (lambda qs: {}, False),                                                             # no results at all
+    (lambda qs: {"results": "busy"}, False),                                            # not a list
+    (lambda qs: {"results": [None, None]}, False),                                      # an entry that is not an object
+    (lambda qs: {"results": [{"vulns": "GHSA-x"}, {"vulns": [{"no": "id"}]}]}, False),  # vulns not a list of advisories
+    (lambda qs: {"results": [{"vulns": [{"id": "GHSA-x"}], "next_page_token": "t"} for _ in qs]}, True),   # paged
+])
+def test_a_short_or_paged_osv_batch_leaves_packages_unverified_not_clean(tmp_path, answer, paged):
+    """The batch answer is matched to the queries by position: a short or odd one must not let packages pass as clean,
+    and a paged one has not said everything (the review of #220)."""
+    rep = ra.Report(tmp_path, ra.dt.date(2026, 11, 1), True)
+    net = BatchNet(answer, http={f"{ra.OSV}/vulns/GHSA-x": vuln("GHSA-x")})
+    asks = [dict(q={"package": {"ecosystem": "npm", "name": n}, "version": "1.0.0"}, subject=f"npm:{n}") for n in "ab"]
+    out = ra.osv_lookup(rep, net, asks)
+    assert {"npm:a", "npm:b"} <= rep.unverified
+    notes = [f for f in rep.findings if f["check"] == "osv-unverified"]
+    assert len(notes) == 1 and "npm:a" in notes[0]["evidence"] and "npm:b" in notes[0]["evidence"]
+    assert ("paged" in notes[0]["title"]) is paged
+    if paged:                                                  # what OSV did send is kept, and still counts
+        assert [[v["id"] for v in a["vulns"]] for a in out] == [["GHSA-x"], ["GHSA-x"]]
+    else:
+        assert all(a["vulns"] is None for a in out)
+
+
+def test_an_empty_osv_result_means_no_advisories(tmp_path):
+    """OSV leaves 'vulns' out when it knows of none: that entry is a real answer, clean, not unverified."""
+    rep = ra.Report(tmp_path, ra.dt.date(2026, 11, 1), True)
+    asks = [dict(q={"package": {"ecosystem": "npm", "name": "a"}, "version": "1.0.0"}, subject="npm:a")]
+    assert ra.osv_lookup(rep, BatchNet(lambda qs: {"results": [{}]}), asks)[0]["vulns"] == []
+    assert not rep.unverified and not rep.findings
+
+
+def test_transitive_python_dependencies_are_checked(tmp_path):
+    """deps.dev's resolved graph of a direct dependency's newest release: OSV is asked about every package in it."""
+    graph = {"nodes": [{"versionKey": {"system": "PYPI", "name": "pyyaml", "version": "6.0.3"}, "relation": "SELF"},
+                       {"versionKey": {"system": "PYPI", "name": "Deep_Lib", "version": "1.2.0"}, "relation": "INDIRECT"}]}
+
+    def osv(q):
+        return ["GHSA-deep"] if q.get("package", {}).get("name") == "deep-lib" else []
+    net = online_net(tmp_path, osv=osv, http={
+        "https://api.deps.dev/v3/systems/pypi/packages/pyyaml/versions/6.0.3:dependencies": graph,
+        f"{ra.OSV}/vulns/GHSA-deep": vuln("GHSA-deep", "HIGH", "1.3.0", "PyPI", "deep-lib")})
+    r = run(checkout(tmp_path), net)
+    f = next(f for f in r["findings"] if f["subject"] == "pypi:deep-lib")
+    assert f["severity"] == "high" and "transitive" in f["title"] and "through pyyaml" in f["title"]
+    assert ">=1.3.0" in f["action"] and f["scope"] == "deps.dev"
+    assert {"name": "deep-lib", "version": "1.2.0", "via": ["pyyaml"]} in r["extra"]["python_transitive"]
+    assert any("transitive" in limit.lower() for limit in r["limits"])
+
+
+def test_acceptances_need_a_fingerprint_for_advisories_and_never_cover_critical(tmp_path):
+    for check, subject in (("advisory", "npm:x"), ("npm-install-script", "npm:fsevents"),
+                           ("npm-no-licence", "npm:khroma"), ("repo-stale", "webkit:occt-import-js")):
+        bad = write(tmp_path, "accepted.yaml", f"- {{check: {check}, subject: '{subject}', reason: read, accepted: 2026-11-01}}\n")
+        with pytest.raises(SystemExit, match="needs its fp"):
+            ra.load_accepted(bad)
+    ok = write(tmp_path, "ok.yaml", "- {check: repo-archived, subject: 'url:https://github.com/a/b', reason: shown as archived}\n")
+    assert ra.load_accepted(ok)[0]["subject"] == "url:https://github.com/a/b"
+    mal = {"severity": "critical", "check": "advisory", "subject": "npm:x", "fp": "f" * 16}
+    assert ra.accepted_reason([{"check": "advisory", "subject": "npm:x", "fp": "f" * 16, "reason": "r"}], mal) is None
+    moderate = dict(mal, severity="medium")
+    assert ra.accepted_reason([{"check": "advisory", "subject": "npm:x", "fp": "f" * 16, "reason": "r"}], moderate)
+
+
+def test_the_token_never_follows_a_redirect(monkeypatch):
+    """urllib copies plain headers to a redirect's target, whatever its host: the token goes in as unredirected."""
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["req"] = req
+        raise ra.urllib.error.URLError("offline")
+    monkeypatch.setattr(ra.urllib.request, "urlopen", fake_urlopen)
+    net = ra.Net()
+    net.token, net.gh = "t0ken", None
+    net.github("repos/a/b")
+    req = seen["req"]
+    assert req.unredirected_hdrs.get("Authorization") == "Bearer t0ken" and "Authorization" not in req.headers
+    redirected = ra.urllib.request.HTTPRedirectHandler().redirect_request(req, None, 302, "Found", {}, "https://elsewhere.invalid/")
+    assert "Authorization" not in redirected.headers and "Authorization" not in redirected.unredirected_hdrs
+
+
+def test_a_flagged_vendored_upstream_is_not_linked(tmp_path):
+    root = checkout(tmp_path)
+    r = run(root, online_net(tmp_path, gh={"repos/someone/tool": repo("other/tool")}))
+    assert ("repo-moved", "vendor:tool") in checks(r)
+    md = ra.to_markdown(r)
+    assert "[tool](https://github.com/someone/tool)" not in md and "`https://github.com/someone/tool`" in md
+    clean = ra.to_markdown(run(checkout(tmp_path / "c")))
+    assert "[tool](https://github.com/someone/tool)" in clean
+
+
+def test_our_own_plugin_at_a_release_is_not_registry_advice(tmp_path):
+    root = checkout(tmp_path)
+    write(root, "docs/contributing-agents.md", "# Agents\n\n```bash\nclaude plugin marketplace add Valpatel/cad-agent#v0.8.0\n"
+                                               "claude plugin install cad-agent@valpatel\n```\n")
+    assert not [f for f in run(root)["findings"] if f["check"] == "install-from-registry"]
+    write(root, "docs/contributing-agents.md", "# Agents\n\n```bash\nclaude plugin marketplace add Valpatel/cad-agent\n"
+                                               "claude plugin install cad-agent@valpatel\n```\n")     # unpinned: still advice
+    assert len([f for f in run(root)["findings"] if f["check"] == "install-from-registry"]) == 2
+    write(root, "docs/contributing-agents.md", "# Agents\n\n```bash\nclaude plugin marketplace add someone/else#v1.0\n```\n")
+    assert [f for f in run(root)["findings"] if f["check"] == "install-from-registry"]
+
+
+def test_repo_settings_need_an_admin_token(tmp_path):
+    """A 404 on vulnerability-alerts means "off" only to an admin; GitHub says 404 to everyone else too."""
+    class Settings(FakeNet):
+        def __init__(self, admin):
+            super().__init__(osv=lambda q: [])
+            self.admin = admin
+
+        def github(self, path):
+            if path == "repos/o/r":       # security_and_analysis comes only with admin rights
+                sa = {key: {"status": "enabled"} for key in
+                      ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates")}
+                return 200, {"full_name": "o/r", "permissions": {"admin": self.admin},
+                             **({"security_and_analysis": sa} if self.admin else {})}, ""
+            return 404, {"message": "Not Found"}, ""
+        def graphql(self, query):
+            return 200, {"data": {"repository": {"dependencyGraphManifests": {
+                "totalCount": 1, "nodes": [{"filename": "package-lock.json", "dependenciesCount": 1}]}}}}, ""
+    for admin in (False, True):
+        r = run(checkout(tmp_path / str(admin)), Settings(admin), repo="o/r")
+        assert (("repo-dependabot-alerts", "repo:o/r") in checks(r)) is admin
+        row = next(x for x in r["inventory"]["repo"] if x["id"] == "repo:o/r")
+        assert row["dependabot_alerts"] == ("disabled" if admin else "not verified (needs admin)")
+        assert ("repo:o/r" in r["unverified"]) is not admin
+
+
+class RepoSettingsSnapshot(FakeNet):
+    """Only the read-only endpoints used by check_repo; no live settings mutations."""
+    def __init__(self, settings, graph_status=200, graph=None, errors=False):
+        self.settings, self.graph_status, self.graph, self.errors = settings, graph_status, graph, errors
+
+    def github(self, path):
+        if path == "repos/o/r":
+            return 200, {"permissions": {"admin": True}, "security_and_analysis": self.settings}, ""
+        assert path == "repos/o/r/vulnerability-alerts"
+        return 204, None, ""
+
+    def graphql(self, query):
+        return self.graph_status, {"data": {"repository": {"dependencyGraphManifests": self.graph}},
+                                   **({"errors": [{"message": "unavailable"}]} if self.errors else {})}, ""
+
+
+@pytest.mark.parametrize("field,check", [
+    ("secret_scanning", "repo-secret-scanning"),
+    ("secret_scanning_push_protection", "repo-push-protection"),
+    ("dependabot_security_updates", "repo-dependabot-updates"),
+])
+@pytest.mark.parametrize("status", ["enabled", "disabled", None, "pending"])
+def test_repo_protections_are_independent_and_missing_is_not_disabled(tmp_path, field, check, status):
+    settings = {key: {"status": "enabled"} for key in
+                ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates")}
+    settings[field] = {"status": status} if status else {}
+    graph = {"totalCount": 1, "nodes": [{"filename": "package-lock.json", "dependenciesCount": 1}]}
+    rep = ra.Report(tmp_path, AS_OF, True)
+    ra.check_repo(rep, RepoSettingsSnapshot(settings, graph=graph), "o/r")
+    result = rep.to_json()
+    assert ((check, "repo:o/r") in checks(result)) is (status == "disabled")
+    assert ("repo:o/r" in result["unverified"]) is (status not in ("enabled", "disabled"))
+    assert len(result["findings"]) == (1 if status == "disabled" else 0)
+
+
+@pytest.mark.parametrize("status,graph,errors,empty,unknown", [
+    (200, {"totalCount": 0, "nodes": []}, False, True, False),
+    (200, {"totalCount": 1, "nodes": [{"filename": "tools/site/package-lock.json", "dependenciesCount": 4}]}, False, False, False),
+    (200, None, False, False, True),
+    (403, None, False, False, True),
+    (200, {"nodes": []}, False, False, True),
+    (200, {"totalCount": 0, "nodes": []}, True, False, True),
+])
+def test_repo_graph_evidence_does_not_infer_a_setting(tmp_path, status, graph, errors, empty, unknown):
+    settings = {key: {"status": "enabled"} for key in
+                ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates")}
+    rep = ra.Report(tmp_path, AS_OF, True)
+    ra.check_repo(rep, RepoSettingsSnapshot(settings, status, graph, errors), "o/r")
+    result = rep.to_json()
+    assert (("repo-dependency-graph-empty", "repo:o/r") in checks(result)) is empty
+    assert ("repo:o/r" in result["unverified"]) is unknown
+    row = next(x for x in result["inventory"]["repo"] if x["id"] == "repo:o/r")
+    assert (isinstance(row["dependency_graph"], str) and "not verified" in row["dependency_graph"]) is unknown
+    if empty:
+        finding = result["findings"][0]
+        assert "cannot fire" not in finding["evidence"]
+        assert "only advisory check" not in finding["action"]
+        assert "does not establish" in finding["evidence"]
+
+
+@pytest.mark.parametrize("body", [None, [], "unavailable"])
+def test_repo_graph_success_with_unreadable_body_is_unverified(tmp_path, body):
+    settings = {key: {"status": "enabled"} for key in
+                ("secret_scanning", "secret_scanning_push_protection", "dependabot_security_updates")}
+    net = RepoSettingsSnapshot(settings)
+    net.graphql = lambda query: (200, body, "")
+    rep = ra.Report(tmp_path, AS_OF, True)
+    ra.check_repo(rep, net, "o/r")
+    result = rep.to_json()
+    assert not result["findings"]
+    assert result["unverified"] == ["repo:o/r"]
+    row = next(x for x in result["inventory"]["repo"] if x["id"] == "repo:o/r")
+    assert row["dependency_graph"] == "not verified (200)"
+
+
+def test_a_private_repository_is_reported_as_gone_with_nothing_about_it(tmp_path):
+    net = online_net(tmp_path, gh={"repos/gumyr/build123d": repo("gumyr/build123d", private=True, description="secret plans")})
+    r = run(checkout(tmp_path), net)
+    assert ("repo-gone", "url:https://github.com/gumyr/build123d") in checks(r, "high")
+    assert "secret plans" not in json.dumps(r)
+    row = next(x for x in r["inventory"]["links"] if x["id"] == "url:https://github.com/gumyr/build123d")
+    assert row["github"]["state"] == "gone" and row["github"]["full_name"] is None
+
+
+# ------------------------------------------------------------------------------------------- the web kit's receipts
+def tgz(files):
+    import io
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size, info.mtime = len(data), 0
+            tf.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def integrity(data):
+    import base64
+    return "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
+
+
+MJS = b'/* mermaid 11.17.2 */ t.version="3.4.12"; katex:"0.16.47"'
+
+
+def receipt_checkout(root, mjs=MJS, bundled=None, tarball_mjs=None):
+    """The fixture with a Mermaid receipt as #192 writes them, and the npm tarball it names."""
+    checkout(root)
+    write(root, f"{ra.KIT}/mermaid/mermaid.min.js", mjs)
+    pkg = tgz({"package/dist/mermaid.min.js": tarball_mjs or mjs, "package/LICENSE": MIT.encode()})
+    url = "https://registry.npmjs.org/mermaid/-/mermaid-11.17.2.tgz"
+    write(root, f"{ra.KIT}/mermaid/SOURCE.json", json.dumps({
+        "package": "mermaid", "version": "11.17.2", "source": url, "npm_integrity": integrity(pkg), "license": "MIT",
+        "files": {"mermaid.min.js": hashlib.sha256(mjs).hexdigest(), "LICENSE": hashlib.sha256(MIT.encode()).hexdigest()},
+        "paths_in_package": {"mermaid.min.js": "package/dist/mermaid.min.js", "LICENSE": "package/LICENSE"},
+        "bundled": bundled or {"dompurify": "3.4.12", "katex": "0.16.47", "note": "inlined"}}))
+    write(root, "software/vendor/THIRD_PARTY_NOTICES.md", (root / "software/vendor/THIRD_PARTY_NOTICES.md").read_text().replace("11.4.1", "11.17.2"))
+    return root, url, pkg
+
+
+def test_kit_components_come_from_the_receipts(tmp_path):
+    root, _url, _pkg = receipt_checkout(tmp_path)
+    write(root, f"{ra.KIT}/file-viewer-sources.json", json.dumps({
+        "three": {"tag": "r160", "source": "https://github.com/mrdoob/three.js/tree/r160/examples/jsm"},
+        "fflate": {"version": "0.8.3", "repository": "https://github.com/101arrowz/fflate/tree/v0.8.3"}}))
+    comps = ra.webkit_components(root)
+    assert comps["file-parsers"]["packages"] == [("three", "0.160.0"), ("fflate", "0.8.3")]
+    assert comps["file-parsers"]["repos"] == ["101arrowz/fflate", "mrdoob/three.js"]
+    assert comps["mermaid"]["bundled"] == [("dompurify", "3.4.12"), ("katex", "0.16.47")]
+    r = run(root)
+    row = next(w for w in r["inventory"]["webkit"] if w["name"] == "mermaid")
+    assert row["bundled"] == ["dompurify@3.4.12", "katex@0.16.47"] and row["hashed"] == 2
+    assert not [f for f in r["findings"] if f["severity"] != "info"], r["findings"]
+
+
+def test_a_receipt_that_disagrees_with_its_file_is_found_offline(tmp_path):
+    root, _url, _pkg = receipt_checkout(tmp_path, bundled={"dompurify": "3.9.9", "note": "x"})
+    src = json.loads((root / f"{ra.KIT}/mermaid/SOURCE.json").read_text())
+    src.update(source="https://example.invalid/mermaid.tgz")
+    write(root, f"{ra.KIT}/mermaid/SOURCE.json", json.dumps(src))
+    by = {(f["check"], f["title"]) for f in run(root)["findings"]}
+    assert any(c == "webkit-version" and "bundles dompurify 3.9.9" in t for c, t in by)
+    assert any(c == "webkit-receipt" and "does not name the npm tarball" in t for c, t in by)
+    write(root, f"{ra.KIT}/mermaid/SOURCE.json", "[not json")
+    assert ("webkit-receipt", "webkit:mermaid") in checks(run(root), "high")
+
+
+def test_bundled_libraries_are_asked_about_and_files_checked_against_their_package(tmp_path):
+    root, url, pkg = receipt_checkout(tmp_path)
+
+    def osv(q):
+        return ["GHSA-dom"] if q.get("package", {}).get("name") == "dompurify" else []
+    net = online_net(tmp_path, osv=osv, files={url: pkg},
+                     http={f"{ra.OSV}/vulns/GHSA-dom": vuln("GHSA-dom", "MODERATE", "3.4.17", name="dompurify")})
+    r = run(root, net)
+    f = next(f for f in r["findings"] if f["check"] == "advisory" and f["subject"] == "webkit:mermaid")
+    assert "dompurify 3.4.12, bundled inside a vendored file" in f["title"] and "dompurify >=3.4.17" in f["action"]
+    row = next(w for w in r["inventory"]["webkit"] if w["name"] == "mermaid")
+    assert row["receipts"]["mermaid"] == {"files": 2, "identical": 2, "differ": [], "missing": [], "patched": []}
+    assert not [f for f in r["findings"] if f["check"].startswith("webkit-") and f["severity"] != "info"]
+
+
+def test_a_file_that_differs_from_its_package_is_drift(tmp_path):
+    root, url, pkg = receipt_checkout(tmp_path, tarball_mjs=MJS + b" upstream")
+    r = run(root, online_net(tmp_path, files={url: pkg}))
+    assert ("webkit-drift", "webkit:mermaid") in checks(r, "high")
+    root2, url2, pkg2 = receipt_checkout(tmp_path / "b")
+    r2 = run(root2, online_net(tmp_path, files={url2: pkg2 + b"tampered"}))      # the registry serves other bytes
+    assert ("webkit-receipt-integrity", "webkit:mermaid") in checks(r2, "high")
+    r3 = run(root2, online_net(tmp_path))                                        # no answer: not verified, not a failure
+    assert ("webkit-receipt-unverified", "webkit:mermaid") in checks(r3, "info") and "webkit:mermaid" in r3["unverified"]
+
+
+def test_the_repo_receipts_match_their_files_offline():
+    """The real kit: every receipt reads, every bundled version is in its file, every receipt names its tarball, and
+    every vendored file has a recorded SHA-256 (three/ and fonts/ since #151)."""
+    r = ra.build(ROOT, AS_OF, None, npm_audit=False).to_json()
+    bad = [f for f in r["findings"] if f["check"] in ("webkit-receipt", "webkit-version", "webkit-hash", "webkit-hash-missing",
+                                                      "webkit-unhashed", "webkit-unknown")]
+    assert not bad, bad
+    mer = next(w for w in r["inventory"]["webkit"] if w["name"] == "mermaid")
+    assert mer["bundled"] and all("@" in b for b in mer["bundled"])
+    assert all(w["hashed"] == w["files"] for w in r["inventory"]["webkit"]), r["inventory"]["webkit"]
+    three = json.loads((ROOT / ra.KIT / "three/SOURCE.json").read_text())
+    patch = three["patched"]["addons/controls/OrbitControls.js"]
+    assert set(three["patched"]) <= set(three["files"]) and patch["upstream_sha256"] != three["files"]["addons/controls/OrbitControls.js"]
+
+
+def kit_folder_checkout(root, files, receipt):
+    """The fixture plus one kit folder with its own SOURCE.json receipt."""
+    checkout(root)
+    for rel, data in files.items():
+        write(root, f"{ra.KIT}/{rel}", data)
+    write(root, f"{ra.KIT}/{rel.split('/')[0]}/SOURCE.json", json.dumps(receipt))
+    return root
+
+
+def test_a_receipt_with_no_npm_package_records_hashes_only(tmp_path):
+    """fonts/ comes from Google Fonts by URL, not npm: its receipt says so, hashes the files, names where each came from
+    and is asked nothing about npm."""
+    font, css = b"wOF2 font bytes", b"@font-face {}"
+    receipt = {"npm": False, "license": "OFL-1.1",
+               "files": {"a.woff2": hashlib.sha256(font).hexdigest(), "fonts.css": hashlib.sha256(css).hexdigest()},
+               "sources": {"a.woff2": {"url": "https://fonts.gstatic.com/s/a/v1/a.woff2"}, "fonts.css": "ours"}}
+    root = kit_folder_checkout(tmp_path, {"fonts/a.woff2": font, "fonts/fonts.css": css}, receipt)
+    assert ra.webkit_components(root)["fonts"] == {"packages": [], "repos": [], "bundled": [], "receipts": []}
+    r = run(root)
+    row = next(w for w in r["inventory"]["webkit"] if w["name"] == "fonts")
+    assert row["hashed"] == row["files"] == 2 and row["packages"] == []
+    assert not [f for f in r["findings"] if f["severity"] != "info"], r["findings"]
+    r = run(root, online_net(tmp_path))                      # nothing to ask OSV or the npm registry about
+    assert not [f for f in r["findings"] if f["subject"] == "webkit:fonts"], r["findings"]
+    write(root, f"{ra.KIT}/fonts/a.woff2", font + b"!")
+    assert ("webkit-hash", "webkit:fonts") in checks(run(root), "high")
+
+
+def test_a_receipt_that_names_no_package_must_say_it_is_not_from_npm(tmp_path):
+    """Leaving "package" out must not skip the advisory and tarball checks without a word: without "npm": false the
+    folder is checked as the npm package of its name, and flagged; with it, every hashed file needs a source."""
+    lib = b"export const x = 1;"
+    receipt = {"version": "1.0.0", "files": {"lib.js": hashlib.sha256(lib).hexdigest()}}
+    root = kit_folder_checkout(tmp_path / "a", {"widget/lib.js": lib}, receipt)
+    assert ra.webkit_components(root)["widget"]["packages"] == [("widget", "1.0.0")]
+    r = run(root)
+    f = next(f for f in r["findings"] if f["subject"] == "webkit:widget" and f["check"] == "webkit-receipt")
+    assert f["severity"] == "medium" and f["title"] == "the widget receipt names no npm package" and '"npm": false' in f["action"]
+    root = kit_folder_checkout(tmp_path / "b", {"widget/lib.js": lib}, {"npm": False, "files": receipt["files"]})
+    f = next(f for f in run(root)["findings"] if f["subject"] == "webkit:widget" and f["check"] == "webkit-receipt")
+    assert f["title"] == "the widget receipt names no source for 1 files" and f["evidence"] == "lib.js"
+    root = kit_folder_checkout(tmp_path / "c", {"widget/lib.js": lib}, dict(receipt, npm=False, sources={"lib.js": "ours"}))
+    f = next(f for f in run(root)["findings"] if f["subject"] == "webkit:widget")      # "version" is an npm field
+    assert f["title"] == 'the widget receipt says "npm": false but names npm fields' and f["evidence"] == "version"
+    plain = {"npm": False, "files": receipt["files"], "sources": {"lib.js": "ours"}}
+    root = kit_folder_checkout(tmp_path / "d", {"widget/lib.js": lib}, plain)
+    assert not [f for f in run(root)["findings"] if f["subject"] == "webkit:widget"]
+    # "npm": false beside a package does not switch the package's checks off
+    root = kit_folder_checkout(tmp_path / "e", {"widget/lib.js": lib}, dict(plain, package="widget", version="1.0.0",
+                                                                          bundled={"dompurify": "3.4.12"}))
+    comp = ra.webkit_components(root)["widget"]
+    assert comp["packages"] == [("widget", "1.0.0")] and comp["bundled"] == [("dompurify", "3.4.12")]
+    f = next(f for f in run(root)["findings"] if f["subject"] == "webkit:widget" and f["check"] == "webkit-receipt")
+    assert f["evidence"] == "package, version, bundled"
+
+
+ORBIT = b"const normalized_delta = Math.abs( delta ) / ( 100 * ( window.devicePixelRatio | 0 ) );"
+ORBIT_PATCHED = b"const normalized_delta = Math.abs( delta ) / 100;"
+CORE = b'const REVISION = "160";'
+
+
+def three_checkout(root, local_orbit=ORBIT_PATCHED, upstream_sha=None, core=CORE, patch=None):
+    """three/ as #151 records it: two files from the npm tarball, one of them patched here."""
+    pkg = tgz({"package/build/three.module.min.js": CORE, "package/examples/jsm/controls/OrbitControls.js": ORBIT})
+    url = "https://registry.npmjs.org/three/-/three-0.160.0.tgz"
+    files = {"three/three.module.min.js": core, "three/addons/controls/OrbitControls.js": local_orbit}
+    kit_folder_checkout(root, files, {
+        "package": "three", "version": "0.160.0", "source": url, "npm_integrity": integrity(pkg), "license": "MIT",
+        "repository": "https://github.com/mrdoob/three.js/tree/r160",
+        "files": {rel.split("/", 1)[1]: hashlib.sha256(data).hexdigest() for rel, data in files.items()},
+        "paths_in_package": {"three.module.min.js": "package/build/three.module.min.js",
+                             "addons/controls/OrbitControls.js": "package/examples/jsm/controls/OrbitControls.js"},
+        "patched": {"addons/controls/OrbitControls.js": patch or {"upstream_sha256": upstream_sha or hashlib.sha256(ORBIT).hexdigest(),
+                                                                  "change": "wheel delta divided by 100"}},
+        "modifications": "None except the patched file"})
+    return root, url, pkg
+
+
+def test_a_patched_file_is_expected_to_differ_and_the_rest_must_not(tmp_path):
+    root, url, pkg = three_checkout(tmp_path / "a")
+    r = run(root, online_net(tmp_path, files={url: pkg}, gh={"repos/mrdoob/three.js": repo("mrdoob/three.js")}))
+    row = next(w for w in r["inventory"]["webkit"] if w["name"] == "three")
+    assert row["receipts"]["three"] == {"files": 2, "identical": 1, "differ": [], "missing": [],
+                                        "patched": ["addons/controls/OrbitControls.js"]}
+    assert not [f for f in r["findings"] if f["check"].startswith("webkit-") and f["severity"] != "info"], r["findings"]
+    assert "three: 1 of 2 (1 patched)" in ra.to_markdown(r)
+    # the patch was lost: the file is the package's again
+    root, url, pkg = three_checkout(tmp_path / "b", local_orbit=ORBIT)
+    r = run(root, online_net(tmp_path, files={url: pkg}))
+    assert any(f["check"] == "webkit-receipt" and "is patched, but it is the package's file" in f["title"] for f in r["findings"])
+    # the package's file is not the one the patch was made against
+    root, url, pkg = three_checkout(tmp_path / "c", upstream_sha="0" * 64)
+    r = run(root, online_net(tmp_path, files={url: pkg}))
+    assert any(f["check"] == "webkit-receipt" and "not the file its patch was made against" in f["title"] for f in r["findings"])
+    # a file that is not recorded as patched still has to be the package's byte for byte
+    root, url, pkg = three_checkout(tmp_path / "d", core=CORE + b" // changed")
+    r = run(root, online_net(tmp_path, files={url: pkg}))
+    drift = next(f for f in r["findings"] if f["check"] == "webkit-drift")
+    assert drift["severity"] == "high" and drift["evidence"].startswith("three.module.min.js vs")
+
+
+@pytest.mark.parametrize("patch", [{"change": "no base recorded"}, {"upstream_sha256": "abc"}, "a string, not a record"])
+def test_a_patched_file_must_name_the_file_it_was_made_against(tmp_path, patch):
+    """A patch with no upstream_sha256 is not taken on trust: offline it is a receipt finding, and online the package's
+    file cannot be shown to be the one it was made against."""
+    root, url, pkg = three_checkout(tmp_path, patch=patch)
+    rec = json.loads((root / ra.KIT / "three/SOURCE.json").read_text())
+    assert [t for t, _e, _a in ra.receipt_problems("three", rec)] == [
+        "the three receipt's patch to addons/controls/OrbitControls.js records no upstream_sha256"]
+    assert ("webkit-receipt", "webkit:three") in checks(run(root), "medium")
+    r = run(root, online_net(tmp_path, files={url: pkg}))
+    assert any(f["check"] == "webkit-receipt" and "not the file its patch was made against" in f["title"] for f in r["findings"])
+    assert next(w for w in r["inventory"]["webkit"] if w["name"] == "three")["receipts"]["three"]["patched"] == [
+        "addons/controls/OrbitControls.js"]
+
+
+# --------------------------------------------------------------------------------------------- the weekly issue
+def test_an_unanswered_week_keeps_its_findings_open():
+    """A finding whose scope did not answer this week is "not re-checked", not resolved: no close-and-reopen churn."""
+    gone, kept = "a" * 16, "b" * 16
+    marker = f"fps={gone}~{ra.scope_tag('url:https://x.org/')},{kept}~{ra.scope_tag('deps.dev')}"
+    mine = {"number": 7, "author": {"login": "app/github-actions"}, "body": f"x\n<!-- cad-supply-chain-report {marker} -->"}
+    r = report_with()
+    r["unverified"] = ["deps.dev"]                       # deps.dev did not answer; the link was re-checked and is fine
+    plan, note = ra.plan_issue(r, [mine], "o/r", "T")
+    assert "1 resolved, 1 not re-checked" in note and [p[0][1] for p in plan] == ["edit", "comment"]
+    assert f"fps={kept}~{ra.scope_tag('deps.dev')} -->" in plan[0][1] and "could not be re-checked" in plan[0][1]
+
+
+def test_issue_text_mentions_nobody():
+    text = "Thanks @someone and @org/team, see #123 and x/y#4; `@scope/pkg` and `#5` in code; mail a@b.c; &#39;"
+    out = ra.no_mentions(text)
+    assert "@someone" not in out and "@org/team" not in out and "#123" not in out and "x/y#4" not in out
+    assert "`@scope/pkg`" in out and "`#5`" in out and "a@b.c" in out and "&#39;" in out
+    r = report_with(("high", "advisory", "c" * 16))
+    r["findings"][0]["evidence"] = "GHSA-x: reported by @attacker in #1"
+    body = ra.plan_issue(r, [], "o/r", "T")[0][0][1]
+    assert "@attacker" not in body and "#1 " not in body
+
+
+# ------------------------------------------------------------------------------------------ the page and the figure
+def _site_selection(files):
+    """Run the builder's dependency-free selector, not a regex extracted from its implementation text."""
+    import shutil
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is an optional local site tool; mandatory Node CI also tests this selector")
+    script = ("const {readFileSync} = await import('node:fs'); "
+              "const {createPublication, folderMapSources} = await import(process.argv[1]); "
+              "const publication = createPublication(JSON.parse(readFileSync(process.argv[2], 'utf8'))); "
+              "const policy = JSON.parse(readFileSync(process.argv[3], 'utf8')); "
+              "let input=''; for await (const chunk of process.stdin) input += chunk; "
+              "const files=JSON.parse(input); "
+              "console.log(JSON.stringify([...publication.selectPages(files).map(p => "
+              "({file:p.file, section:p.section.id, public:publication.publicPath(p.file)})), "
+              "...folderMapSources(files,policy,publication).map(p => ({file:p.file,section:'folder-maps',public:p.public}))]));")
+    return subprocess.run([node, "--input-type=module", "-e", script,
+                           (ROOT / "tools/site/publication.mjs").as_uri(),
+                           str(ROOT / 'tools/site/page-sources.json'), str(ROOT / 'tools/site/compiler/repo-map.json')],
+                          input=json.dumps(files), capture_output=True, text=True)
+
+
+def _tracked_pages(root):
+    # No .strip() or whitespace split: spaces, tabs and newlines are legal filename bytes.
+    raw = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=True).stdout
+    return [p for p in raw.decode().split("\0") if p]
+
+
+def test_published_pages_match_the_site_build():
+    """Compare the audit predicate with real builder selection over the current tracked sources."""
+    files = _tracked_pages(ROOT)
+    result = _site_selection(files)
+    assert result.returncode == 0, result.stderr
+    selected = json.loads(result.stdout)
+    assert {p["file"] for p in selected} == {f for f in files if ra.published(f, report=True)}
+    policy = next(p for p in selected if p["file"] == ".github/CONTRIBUTING.md")
+    assert policy == {"file": ".github/CONTRIBUTING.md", "section": "docs", "public": "CONTRIBUTING.md"}
+    assert not any(p["file"] in ("CONTRIBUTING.md", "SECURITY.md", ".github/SECURITY.md") for p in selected)
+    notices = next(p for p in selected if p["file"] == "software/vendor/THIRD_PARTY_NOTICES.md")
+    assert notices["public"] == "THIRD_PARTY_NOTICES.md"
+    assert not any(p["file"] == "THIRD_PARTY_NOTICES.md" for p in selected)
+
+
+def test_weekly_link_audit_selects_current_published_files(tmp_path):
+    """Execute the configured selector and compare lychee's exact file list to the actual publisher."""
+    import argparse
+    import shlex
+    import sys
+    import yaml
+    workflow = yaml.safe_load((ROOT / ".github/workflows/supply-chain.yml").read_text())
+    step = next(s for s in workflow["jobs"]["references"]["steps"] if "lycheeverse/lychee-action" in s.get("uses", ""))
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--files-from", required=True)
+    options, remaining = parser.parse_known_args(shlex.split(step["with"]["args"]))
+    assert options.files_from == 'build/lychee-inputs.txt'
+    assert '--exclude-path' not in remaining, 'do not silently drop selected publication sources'
+    selector = next(s for s in workflow['jobs']['references']['steps'] if s.get('name') == 'Select actual published link sources')
+    command = shlex.split(selector['run'])
+    assert command == ['python3', 'tools/resource_audit.py', 'link-inputs', '--out', options.files_from]
+    output = tmp_path / 'inputs.txt'
+    run = subprocess.run([sys.executable, *command[1:-1], str(output)], cwd=ROOT, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    inventory = set(_tracked_pages(ROOT))
+    selection = _site_selection(sorted(inventory))
+    assert selection.returncode == 0, selection.stderr
+    actual = output.read_text().splitlines()
+    expected = {p['file'] for p in json.loads(selection.stdout)} - {ra.REPORT_MD}
+    assert len(actual) == len(set(actual))
+    assert set(actual) == expected, 'weekly link inputs drifted from actual publication sources'
+    assert '.agents/agents/README.md' in actual and 'software/cadagent/README.md' in actual
+    assert not any(p.startswith('software/vendor/text-to-cad/') for p in actual)
+
+
+def test_link_inputs_preserve_literal_paths_or_fail_closed():
+    assert ra.link_inputs(['docs/space name.md', 'docs/tab\tname.md', 'docs/β.md']) == ['docs/space name.md', 'docs/tab\tname.md', 'docs/β.md']
+    for name in ['docs/line\nbreak.md', 'docs/[glob].md', 'docs/wild*.md']:
+        with pytest.raises(ValueError, match='cannot represent'):
+            ra.link_inputs([name])
+    with pytest.raises(ValueError, match='empty'):
+        ra.link_inputs(['software/vendor/text-to-cad/README.md'])
+
+
+@pytest.mark.parametrize("source", [".github/CONTRIBUTING.md", "software/vendor/THIRD_PARTY_NOTICES.md"])
+def test_publication_uses_moved_source_and_nul_safe_real_inventory(tmp_path, source):
+    """A stale old file cannot stand in for a missing mandatory source; whitespace paths stay whole."""
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "init.templateDir=", "init", "-q"], check=True)
+    sources = json.loads((ROOT / "tools/site/page-sources.json").read_text())["files"]
+    expected = {r["source"] for r in sources} | {"README.md", "docs/space name.md", "docs/tab\tname.md"}
+    extra = {"CONTRIBUTING.md", "THIRD_PARTY_NOTICES.md", ".github/SECURITY.md", "SECURITY.md", "docs/AGENTS.md", "docs/research/data.json"}
+    for name in expected | extra:
+        write(tmp_path, name, "# candidate\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "--all"], check=True)
+    files = _tracked_pages(tmp_path)
+    assert set(files) == expected | extra
+    result = _site_selection(files)
+    assert result.returncode == 0, result.stderr
+    assert {p["file"] for p in json.loads(result.stdout)} == expected
+    assert {f for f in files if ra.published(f, report=True)} == expected
+    (tmp_path / source).unlink()
+    subprocess.run(["git", "-C", str(tmp_path), "add", "--all"], check=True)
+    missing = _site_selection(_tracked_pages(tmp_path))
+    assert missing.returncode != 0
+    assert f"required published source {source} is missing" in missing.stderr
+
+
+def test_figure_is_deterministic_and_says_what_it_leaves_out(tmp_path):
+    r = run(checkout(tmp_path))
+    r["findings"] += [dict(severity="high", check="advisory", subject="pypi:x", title="t", evidence="", action="", fp="1" * 16),
+                      dict(severity="low", check="link-dead", subject="url:https://x.org/", title="t", evidence="",
+                           action="", fp="2" * 16, accepted="fine (2026-11-01)")]
+    a, b = ra.findings_svg(r), ra.findings_svg(r)
+    assert a == b and a.startswith("<svg") and "Python dependencies: 1 high" in a
+    assert "Links and catalogue: none" in a                     # the accepted finding is not drawn
+    assert "/home/" not in a and str(tmp_path) not in a
+
+
+
+def test_committed_page_and_figure_match_committed_report():
+    """docs/research/security-report.md and docs/img/supply-chain/findings.svg are rendered from docs/research/security-report.json,
+    so neither can disagree with it."""
+    assert ra.main(["render", "--check"]) == 0
+
+
+def test_the_page_folds_all_but_critical_and_high(tmp_path):
+    r = run(checkout(tmp_path))
+    r["findings"] += [dict(severity=s, check=c, subject="pypi:x", title=c, evidence="", action="", fp=str(i) * 16)
+                      for i, (s, c) in enumerate([("high", "advisory"), ("medium", "link-dead"), ("low", "repo-stale")])]
+    md = ra.to_markdown(r, figure="f.svg")
+    high, medium = md.index("### High (1)"), md.index("### Medium (1)")
+    assert "<details>" not in md[high:medium] and "<details><summary>1 medium: 1 link-dead</summary>" in md
+    assert md.index("<details><summary><strong>Limits.") < md.index("## Findings") and md.count("<details>") == md.count("</details>")
+
+
+def _assert_public_report(text, home):
+    # A public route such as committee.iso.org/home/tc2 is not an OS home directory. Keep rejecting bare
+    # absolute paths, file URIs, Windows homes and actual current-home text, including inside a URL/query.
+    private_path = r"(?<![A-Za-z0-9./-])/(?:home|Users)/|file:///(?:home|Users)/|(?i:[a-z]:[\\/]+Users[\\/])"
+    assert not ra.re.search(private_path, text)
+    assert len(home) < 2 or home not in text
+
+
+@pytest.mark.parametrize("text", [
+    '"/home/fixture-agent/source"', '`/Users/fixture-agent/source`',
+    '"file:///home/fixture-agent/source"', '"C:\\Users\\fixture-agent\\source"',
+    '"C:\\\\Users\\\\fixture-agent\\\\source"', 'https://example.org/?path=/home/fixture-agent/source',
+    'cwd:/home/other-agent/private-project',
+])
+def test_report_privacy_guard_still_rejects_real_local_paths(text):
+    with pytest.raises(AssertionError):
+        _assert_public_report(text, "/different/current-home")
+
+
+def test_report_privacy_guard_keeps_public_routes_and_actual_home_detection():
+    _assert_public_report('"https://committee.iso.org/home/tc2"', "/home/fixture-agent")
+    with pytest.raises(AssertionError):
+        _assert_public_report('https://example.org/path/home/fixture-agent/source', "/home/fixture-agent")
+
+
+def test_committed_report_is_clean_and_dated():
+    """The committed report came from a committed tree (no uncommitted changes) and has no private details."""
+    r = json.loads((ROOT / "docs/research/security-report.json").read_text())
+    assert r["schema"] == ra.SCHEMA and r["dirty"] is False and r["mode"] == "online"
+    text = (ROOT / "docs/research/security-report.json").read_text() + (ROOT / "docs/research/security-report.md").read_text()
+    home = str(Path.home())          # whichever machine runs it: no account name is written down here
+    _assert_public_report(text, home)
+
+
+def test_agent_kit_inventory_has_exact_current_nonempty_names_and_no_stale_substitution(tmp_path):
+    root = checkout(tmp_path)
+    expected = {
+        "skill:cad-motion-validation", "skill:cad-pr-review", "skill:cad-remote-runs", "skill:cad-supply-chain",
+        "skill:cad-work-tracking", "skill:design-process", "skill:mcmaster-parts", "skill:pem-fastener-selection", "skill:sheet-metal-hardware",
+        "agent:cad-pr-reviewer", "agent:cad-resume",
+    }
+    current_skills = {'repository-documentation', 'scada-component-authoring', 'scada-distribution-review',
+                      'scada-model-adaptation', 'scada-system-authoring', 'scada-viewer-review'}
+    for name in current_skills:
+        write(root, f'.agents/skills/{name}/SKILL.md', '# Current instruction\n')
+    expected.update(f'skill:{name}' for name in current_skills)
+    def own():
+        rep = ra.Report(root, AS_OF, False)
+        ra.check_skills(rep)
+        return rep, {row["id"]: row for row in rep.inventory["skills"] if row["source"] == "this repository"}
+    rep, rows = own()
+    assert set(rows) == expected
+    assert all(row["file"].startswith(".agents/") for row in rows.values())
+    write(root, '.agents/agents/README.md', '# Roles\n\n```sh\nnpx example-unpinned-tool\n```\n')
+    rep, mapped = own()
+    assert set(mapped) == expected  # The human map is not another skill/role.
+    assert any(f['subject'] == 'doc:.agents/agents/README.md' for f in rep.findings), \
+        'the map must still receive install-advice auditing'
+    for row in rows.values():
+        write(root, row["file"].removeprefix(".agents/"), "# Stale copy\n")
+    assert set(own()[1]) == expected
+    missing = root / ".agents/skills/design-process/SKILL.md"
+    missing.unlink()
+    rep, rows = own()
+    assert set(rows) == expected - {"skill:design-process"}
+    findings = [f for f in rep.findings if f["check"] == "skill-missing"]
+    assert len(findings) == 1 and findings[0]["severity"] == "high"
+    assert findings[0]["subject"] == "doc:.agents/skills/design-process/SKILL.md"
+    # The real checkout must never pass with an empty or partial own-kit inventory either.
+    actual = ra.Report(ROOT, AS_OF, False)
+    ra.check_skills(actual)
+    assert {row["id"] for row in actual.inventory["skills"] if row["source"] == "this repository"} == expected

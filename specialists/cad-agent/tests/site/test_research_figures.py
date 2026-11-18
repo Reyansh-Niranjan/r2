@@ -1,0 +1,108 @@
+"""The research charts are drawn from the tables on their pages, and stay in step with them."""
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+from tests.repo.test_markdown_images import image_refs, resolve
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_committed_charts_match_their_tables():
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / "research_figures.py"), "--check"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def _image_source(page, figure):
+    text = page.read_text()
+    sources = [src for src in image_refs(text) if resolve(page.relative_to(ROOT).as_posix(), src) == f"docs/img/research/{figure}"]
+    assert len(sources) == 1, (page, figure, sources)
+    return sources[0]
+
+
+def test_charts_are_embedded_where_their_tables_are():
+    compliant = ROOT / "docs" / "research" / "compliant-mechanisms.md"
+    landscape = ROOT / "docs" / "research" / "agent-workflow" / "landscape.md"
+    _image_source(compliant, "fdm-anisotropy.svg")
+    _image_source(landscape, "landscape-stars.svg")
+    md = compliant.read_text()
+    assert md.index("## 3. Allowable") < md.index(_image_source(compliant, "moulded-strain.svg")) < md.index("**Bayer Table 2**")
+    assert md.index("## 6. Printed") < md.index(_image_source(compliant, "printed-strain.svg")) < md.index("| Material (TDS) |")
+
+
+def test_every_row_with_ratios_is_drawn():
+    svg = (ROOT / "docs" / "img" / "research" / "fdm-anisotropy.svg").read_text()
+    for name in ("PLA Basic, Bambu", "PolyMide CoPA, wet", "TPU 95A HF, Bambu"):
+        assert f">{name}</text>" in svg
+    for name in ("PA6-CF, Bambu", "PETG Basic V3.0, Bambu", "PETG Basic V2.0, Bambu"):   # read from Bambu's sheets (#156)
+        assert f">{name}</text>" in svg
+    assert "Not drawn" not in svg                            # every row with a ratio is from a data sheet now
+    assert "≥" not in svg                                    # TPU's two lower bounds give no ratio, not a bound
+    assert svg.count(">not known</text>") == 1               # TPU's strain
+    assert "PolyFlex TPU95" not in svg                       # no Z data: not drawn
+    md = (ROOT / "docs" / "research" / "compliant-mechanisms.md").read_text()
+    section = md[md.index("## 5. FDM anisotropy"):]
+    lines = section.splitlines()
+    first = next(i for i, line in enumerate(lines) if line.startswith("|"))
+    table = lines[first:next(i for i in range(first, len(lines)) if not lines[i].startswith("|"))]
+    rows = table[2:]                                          # without the header and the --- line
+    with_ratio = [r for r in rows if any(c.strip()[:1].isdigit() for c in r.split("|")[5:7])
+                  and not re.search(r"\((?:s|u)\b", r.split("|")[7])]
+    assert svg.count('text-anchor="end"') == len(with_ratio) == 16   # every data-sheet row with a ratio, and no other
+
+
+def _figures():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("research_figures", ROOT / "tools" / "research_figures.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_cell_is_a_number_or_an_explicit_gap():
+    import pytest
+    number = _figures().number
+    assert number("22,951", "t") == (22951.0, "")
+    assert number(">480", "t") == (480.0, ">")
+    for gap in ("—", "— (both lower bounds)", "no Z data", "n/a"):
+        assert number(gap, "t") is None
+    for odd in ("0.61[^1]", "~0.6", "32.3k", "(u) 0.5", "0.5 (est.)"):
+        with pytest.raises(ValueError, match="neither a number nor a gap"):
+            number(odd, "t")
+
+
+def test_a_strain_cell_is_a_percentage_a_range_or_a_pair():
+    import pytest
+    percent = _figures().percent
+    assert percent("4 %", "t") == (4.0, "")
+    assert percent("0.8–1.2 %", "t") == (0.8, "", 1.2)
+    assert percent("1.1 / 0.6 %", "t") == (1.1, "")              # single / repeat: the single-use value
+    for odd in ("4", "~4 %", "4 % (u)", "strain does not govern"):
+        with pytest.raises(ValueError, match="not a strain in per cent"):
+            percent(odd, "t")
+
+
+def test_strain_charts_draw_every_row_and_ranges_as_ranges():
+    moulded = (ROOT / "docs" / "img" / "research" / "moulded-strain.svg").read_text()
+    assert moulded.count('text-anchor="end"') == 6 + 9                    # Bayer's six resins and DuPont's nine
+    assert ">2–4 %</text>" in moulded and ">0.8–1.2 %</text>" in moulded   # a range keeps both ends
+    assert moulded.count('fill-opacity="0.35"') == 5                       # the five ranges in DuPont's table
+    printed = (ROOT / "docs" / "img" / "research" / "printed-strain.svg").read_text()
+    assert printed.count('text-anchor="end"') == 13                       # every row but TPU, which strain does not govern
+    assert ">CoPA, dry, Polymaker</text>" in printed and ">3.3 %</text>" in printed
+    assert "TPU 95A not drawn" in printed
+
+
+def test_thermal_chart_draws_the_table_against_the_modules_limit():
+    md = (ROOT / "docs" / "research" / "simulation-tools.md").read_text()
+    assert md.index("## 6. Thermal") < md.index(_image_source(ROOT / "docs" / "research" / "simulation-tools.md", "thermal-limits.svg")) < md.index("**Jetson AGX Orin")
+    svg = (ROOT / "docs" / "img" / "research" / "thermal-limits.svg").read_text()
+    for label in ("PLA Basic (V3.0)", "PETG Basic (V3.0)", "PETG HF (V1.0)"):
+        assert svg.count(f'text-anchor="end">{label}<') == 1  # preserve source editions in a detached figure
+    assert ">71 °C</text>" in svg and ">68 °C</text>" in svg  # PETG V3.0 ISO 75 at 0.45/1.8 MPa
+    assert ">TTP max 80 °C</text>" in svg and 'stroke-dasharray="5 4"' in svg     # the limit, read from the page
+    assert svg.count("<rect") == 1 + 3 + 3 * 3                                    # frame, legend, three bars a row
+    import pytest
+    with pytest.raises(ValueError, match="not a temperature"):
+        _figures().celsius("60 C", "t")

@@ -14,7 +14,7 @@ $TargetDirectory = (Resolve-Path $TargetDirectory).Path
 Write-Host "Uninstalling R2 from: $TargetDirectory" -ForegroundColor Yellow
 
 $skillsDir = Join-Path $TargetDirectory ".agents\skills"
-$commands = @("r2", "r2-init", "r2-code", "r2-debug", "r2-web", "r2-motion")
+$commands = @("r2", "r2-init", "r2-code", "r2-debug", "r2-web", "r2-motion", "r2-3d")
 
 foreach ($cmd in $commands) {
     $cmdPath = Join-Path $skillsDir $cmd

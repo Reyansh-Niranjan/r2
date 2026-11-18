@@ -51,4 +51,5 @@ if (Test-Path $installScript) {
     & ([scriptblock]::Create((gh api -H "Accept: application/vnd.github.raw+json" "repos/$REPO/contents/install.ps1"))) -TargetDirectory $TargetDirectory -Force
 }
 
+Write-Host "Deployed 7 command skills (/r2, /r2:init, /r2:code, /r2:motion, /r2:web, /r2:debug, /r2:3d) to .agents/skills/." -ForegroundColor Cyan
 Write-Host "R2 successfully updated to $remoteVersion!" -ForegroundColor Green

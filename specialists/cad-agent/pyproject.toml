@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cad-agent"
+version = "0.43.0"
+description = "Agent toolkit for mechanical and electrical design: CAD checks, simulation, manufacturing files and review reports"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+# Floors (#151): no lower release with a known advisory (docs/research/security-report.md), and each one tested: CI runs the
+# core suite at numpy 1.22.0, pyyaml 6.0 and pytest 9.0.3, and the site tests at markdown 3.8.1. vtk 9.5.2 is the lowest
+# VTK that cadquery-ocp 7.9.3 (cadquery 2.8) pins; cadquery 2.6 and 2.7 pin vtk 9.3.1, which has three advisories.
+# Python: the package and its core suite run on 3.10, but the cad and sim extras need 3.11 or newer. Every pillow that
+# installs on 3.10 (12.3.0 and older) has critical advisories, and cadquery 2.8 needs 3.11.
+dependencies = ["pyyaml>=6.0", "numpy>=1.22", "packaging>=26.3"]
+
+[project.optional-dependencies]
+bambu = ["paho-mqtt>=2.1"]
+cad = [
+    "cadquery>=2.8",
+    "trimesh>=4.0",
+    "vtk>=9.5.2",
+    "matplotlib>=3.7",
+    "pillow>=13.0",
+    "numpy>=1.22",
+]
+robot = ["mujoco>=3"]
+# airflow/heat case writing, topology optimisation, pictures and animations (OpenFOAM, Bambu Studio and PrusaSlicer are external programs)
+sim = ["trimesh>=4.0", "manifold3d>=2.4", "rtree>=1.0", "pyvista>=0.44", "imageio>=2.30", "imageio-ffmpeg>=0.5",
+       "pymoto>=2.0", "matplotlib>=3.7", "pillow>=13.0", "scipy>=1.10"]
+site = ["markdown>=3.8.1"]
+# PyPardiso's MKL backend supports Linux/Windows x86-64; the solver already falls back to SciPy elsewhere.
+fea = ["gmsh>=4.11", "scikit-fem>=9", "matplotlib>=3.7",
+       "pypardiso>=0.4; (platform_system == 'Linux' or platform_system == 'Windows') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')",
+       "pyamg>=5"]
+explore = ["optuna>=3.4"]
+dev = ["pytest>=9.0.3"]
+
+[project.scripts]
+cad-agent = "cadagent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["software"]
+include = ["cadagent*"]
+
+[tool.setuptools.package-data]
+# The installed SDK includes owned galleries, examples and notices.
+# Published assembly guides use their smaller explicit runtime profile.
+cadagent = ["webkit/*", "webkit/model/*", "webkit/files/*", "webkit/ui/*", "webkit/documents/*",
+            "webkit/assembly/*", "webkit/fea/*", "webkit/calculators/*", "webkit/host/*",
+            "webkit/vendor/**/*", "webkit/scada/**/*", "webkit/simulation/**/*", "publish/runtime-profiles.json"]
+
+# `cad-agent init`'s starter, for a wheel install: docs/examples/starter-box installed under <prefix>/share/cad-agent/. A
+# checkout's own docs/examples/starter-box comes first (cadagent.project.starter_dir); tests/cli/test_init.py keeps this list
+# the starter's files.
+[tool.setuptools.data-files]
+"share/cad-agent/starter-box" = ["docs/examples/starter-box/.gitignore", "docs/examples/starter-box/README.md",
+                                 "docs/examples/starter-box/cad-agent.yaml"]
+"share/cad-agent/starter-box/cad" = ["docs/examples/starter-box/cad/build.py", "docs/examples/starter-box/cad/README.md"]
+"share/cad-agent/starter-box/tools" = ["docs/examples/starter-box/tools/checks.py", "docs/examples/starter-box/tools/README.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["software"]

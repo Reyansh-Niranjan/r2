@@ -1,0 +1,180 @@
+"""The cad: section of cad-agent.yaml, beside other tools' sections."""
+
+from __future__ import annotations
+
+import json
+import sys
+import textwrap
+from pathlib import Path
+
+import pytest
+
+from cadagent.project import CadConfigError, find_config, load_project, other_cad_configs
+
+YAML = textwrap.dedent("""\
+    project:
+      name: widget
+      display_name: Widget Enclosure
+    projects:
+      - name: widget-tests
+        path: .
+        runner: pytest
+        test_args: [tests/]
+    cad:
+      name: widget
+      title: Widget enclosure
+      revision_from: cad/parameters.json:meta.revision
+      printer: {name: Test printer, bed_mm: [220, 220, 250]}
+      steps:
+        - {name: build, run: cad/build.py, log: build.log}
+        - name: check
+          run: tools/check.py
+          timeout_s: 60
+          needs: [build]
+      part_ids: {base: P1}
+      checks:
+        - {id: fit, title: Fit check, file: exports/fit.json}
+        - id: review
+          title: Review
+          file: exports/review.json
+          pass_key: [a.ok, b]
+          evidence: [preview/fit.png]
+          links: [docs/notes.html, {url: docs/x.csv, label: X}]
+      package: {include: ["exports/*.stl"]}
+      html_pages: [preview/index.html]
+      colour_scheme: blue
+    """)
+
+@pytest.fixture
+def project_root(tmp_path: Path) -> Path:
+    (tmp_path / "cad-agent.yaml").write_text(YAML)
+    (tmp_path / "cad").mkdir()
+    (tmp_path / "cad" / "parameters.json").write_text(json.dumps({"meta": {"revision": "0.7"}}))
+    return tmp_path
+
+def test_full_section_loads(project_root):
+    p = load_project(project_root)
+    assert p.name == "widget" and p.title == "Widget enclosure"
+    assert p.resolve_revision() == "0.7"
+    assert p.printer.bed_mm == (220.0, 220.0, 250.0)
+    assert [s.name for s in p.steps] == ["build", "check"]
+    assert p.steps[0].log == "build.log" and p.steps[0].timeout_s == 1800
+    assert p.steps[1].timeout_s == 60 and p.steps[1].needs == ["build"]
+    assert p.checks[0].pass_keys == ["pass"]
+    assert p.checks[1].pass_keys == ["a.ok", "b"]
+    assert p.checks[1].links == [{"url": "docs/notes.html", "label": "docs/notes.html"},
+                                 {"url": "docs/x.csv", "label": "X"}]
+    assert p.part_label("base") == "P1 · base" and p.part_label("lid_top") == "lid top"
+    assert p.unknown_keys == ["colour_scheme"]
+
+def test_defaults(tmp_path):
+    (tmp_path / "cad-agent.yaml").write_text("cad:\n  name: bare\n")
+    p = load_project(tmp_path)
+    root = tmp_path.resolve()
+    assert p.exports_dir == root / "exports"
+    assert p.preview_dir == root / "preview"
+    assert p.docs_dir == root / "docs"
+    assert p.parts_file == root / "exports" / "geometry-checks.json"
+    assert p.python == sys.executable
+    assert p.steps == [] and p.checks == [] and p.printer.bed_mm is None
+    assert (p.serve.host, p.serve.port) == ("127.0.0.1", 0)
+    assert p.resolve_revision() is None
+
+def test_project_venv_python_is_the_default_when_present(tmp_path):
+    (tmp_path / "cad-agent.yaml").write_text("cad:\n  name: v\n")
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("")
+    assert load_project(tmp_path).python == str(venv_python.resolve())
+
+@pytest.mark.parametrize("written", ["~/tools/venv/bin/python", "$HOME/tools/venv/bin/python",
+                                     "${HOME}/tools/venv/bin/python"])
+def test_python_expands_the_home_directory(tmp_path, monkeypatch, written):
+    """``~`` and ``$HOME`` name the user's home, not a folder in the project (#288)."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    (tmp_path / "cad-agent.yaml").write_text(f"cad:\n  name: h\n  python: {written}\n")
+    assert load_project(tmp_path).python == str(home / "tools" / "venv" / "bin" / "python")
+
+def test_python_relative_paths_and_bare_names_keep_their_meaning(tmp_path, monkeypatch):
+    (tmp_path / "cad-agent.yaml").write_text("cad:\n  python: venv/bin/python\n")
+    assert load_project(tmp_path).python == str(tmp_path.resolve() / "venv" / "bin" / "python")
+    (tmp_path / "cad-agent.yaml").write_text("cad:\n  python: python3\n")
+    assert load_project(tmp_path).python == "python3"
+    # only the home directory expands: another variable, even one starting HOME and set, stays literal
+    monkeypatch.setenv("HOMEDIR", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "cad-agent.yaml").write_text("cad:\n  python: $HOMEDIR/python\n")
+    assert load_project(tmp_path).python == str(tmp_path.resolve() / "$HOMEDIR" / "python")
+
+def test_literal_revision_wins_and_missing_revision_file_is_unknown(tmp_path):
+    (tmp_path / "cad-agent.yaml").write_text("cad:\n  revision_from: cad/p.json:revision\n")
+    assert load_project(tmp_path).resolve_revision() is None
+    (tmp_path / "cad-agent.yaml").write_text("cad:\n  revision: '3'\n  revision_from: cad/p.json:revision\n")
+    assert load_project(tmp_path).resolve_revision() == "3"
+
+@pytest.mark.parametrize(
+    "cad, match",
+    [
+        ("  revision_from: no-colon.json\n", "revision_from"),
+        ("  steps:\n    - {name: a}\n", "'name' and 'run'"),
+        ("  steps:\n    - {name: a, run: a.py}\n    - {name: a, run: b.py}\n", "duplicate"),
+        ("  steps:\n    - {name: a, run: a.py, needs: [b]}\n    - {name: b, run: b.py}\n", "earlier step"),
+        ("  checks:\n    - {id: x}\n", "'id' and 'file'"),
+        ("  printer: {bed_mm: [1]}\n", "bed_mm"),
+        ("  steps: build.py\n", "must be a list"),
+    ],
+)
+def test_malformed_sections_are_rejected_with_the_reason(tmp_path, cad, match):
+    (tmp_path / "cad-agent.yaml").write_text("cad:\n" + cad)
+    with pytest.raises(CadConfigError, match=match):
+        load_project(tmp_path)
+
+def test_missing_config_or_section_is_an_error(tmp_path):
+    with pytest.raises(CadConfigError, match="not found"):
+        load_project(tmp_path)
+    (tmp_path / "cad-agent.yaml").write_text("project:\n  name: x\n")
+    with pytest.raises(CadConfigError, match="no cad: section"):
+        load_project(tmp_path)
+
+def test_only_cad_agent_yaml_is_read(tmp_path):
+    (tmp_path / "project.yaml").write_text(YAML)
+    assert find_config(tmp_path.resolve()) is None
+    with pytest.raises(CadConfigError, match="project.yaml has a cad: section but only cad-agent.yaml is read: "
+                                             "rename it to cad-agent.yaml"):
+        load_project(tmp_path)
+    (tmp_path / "project.yaml").rename(tmp_path / "cad-agent.yaml")
+    assert find_config(tmp_path.resolve()) == tmp_path.resolve() / "cad-agent.yaml"
+    p = load_project(tmp_path)
+    assert p.name == "widget" and [s.name for s in p.steps] == ["build", "check"]
+    assert p.unknown_keys == ["colour_scheme"]
+
+def test_cad_agent_yaml_is_the_config_even_without_a_cad_section(tmp_path):
+    (tmp_path / "other.yaml").write_text("cad:\n  name: old\n")
+    (tmp_path / "cad-agent.yaml").write_text("other: {}\n")
+    with pytest.raises(CadConfigError, match="cad-agent.yaml has no cad: section"):
+        load_project(tmp_path)
+
+def test_the_not_found_hint_names_only_top_level_cad_sections(tmp_path):
+    (tmp_path / "b.yml").write_text("cad:\n  name: b\n")
+    (tmp_path / "a.yaml").write_text("tools:\n  x: 1\ncad: {name: a}\n")
+    (tmp_path / "nested.yaml").write_text("project:\n  cad:\n    name: n\n")
+    (tmp_path / "notes.txt").write_text("cad:\n")
+    (tmp_path / "dir.yaml").mkdir()
+    assert other_cad_configs(tmp_path) == ["a.yaml", "b.yml"]
+    with pytest.raises(CadConfigError, match="a.yaml, b.yml have a cad: section but only cad-agent.yaml is read: "
+                                             "rename the one that holds the project config to cad-agent.yaml"):
+        load_project(tmp_path)
+
+
+def test_part_process_names_a_process_per_part_and_refuses_an_unknown_one(tmp_path):
+    """#577: a mistyped process must not be read as printed."""
+    (tmp_path / "cad-agent.yaml").write_text('cad:\n  name: t\n  part_process: {"*": weldment, motor: Purchased, lid: fdm}\n')
+    project = load_project(tmp_path)
+    assert project.part_process == {"*": "weldment", "motor": "Purchased", "lid": "fdm"} and project.unknown_keys == []
+    for bad in ("{chassis: carved}", "{chassis: 3}", "[chassis]"):
+        (tmp_path / "cad-agent.yaml").write_text(f"cad:\n  name: t\n  part_process: {bad}\n")
+        with pytest.raises(CadConfigError, match="cad.part_process"):
+            load_project(tmp_path)
+    (tmp_path / "cad-agent.yaml").write_text("cad:\n  name: t\n")
+    assert load_project(tmp_path).part_process == {}

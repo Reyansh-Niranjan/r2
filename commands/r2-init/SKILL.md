@@ -1,6 +1,6 @@
 ---
 name: r2:init
-description: "R2 Workspace Initialization & Onboarding Orchestrator. Audits environment, populates R2 specialist skills without touching root skills, registers Graphify hooks, configures Impeccable live mode, scaffolds AGENTS.md, and locks requirements via /grill-me. Does NOT load reference reasoning prompts."
+description: "R2 Workspace Initialization & Onboarding Orchestrator. Audits environment, populates R2 specialist skills without touching root skills, registers Graphify hooks, configures Impeccable live mode, scaffolds AGENTS.md, locks requirements in .r2/project-profile.json via /grill-me, and sets up .r2/ project rules and REVIEW.md tracking. Does NOT load reference reasoning prompts."
 ---
 
 # /r2:init — R2 Workspace Initialization
@@ -17,7 +17,7 @@ Orchestrates complete environment setup and skill onboarding for the R2 Skill Or
 Follow this strict step-by-step pipeline when `/r2:init` is invoked:
 
 ### Step 1: Project & Skill Audit (Non-Destructive)
-1. Inspect the target workspace root for package managers (`package.json`, `pnpm-workspace.yaml`, `pyproject.toml`), framework configurations, and Git repository metadata.
+1. Inspect the target workspace root for package managers (`package.json`, `pnpm-workspace.yaml`, `pyproject.toml`), framework configurations, CAD assets (`cad/`, `model.py`), and Git repository metadata.
 2. Check existing native skills in `.agents/skills/`.
 3. **Never overwrite** existing native skills or project-specific configurations without explicit user authorization. Reuse compatible local skills where available.
 
@@ -31,13 +31,11 @@ Or to install all available catalog specialists:
 python .agents/skills/r2/scripts/specialist-manager.py install-all
 ```
 All specialist skills reside strictly in [.agents/skills/r2/skills/](.agents/skills/r2/skills/):
-Ensure all 59 specialist skills reside in [.agents/skills/r2/skills/](.agents/skills/r2/skills/):
-- **Original R2 Specialists (34):** `animate`, `animation-vocabulary`, `apple-design`, `awwwards`, `brag-slim`, `codebase-design`, `context7`, `design-taste-frontend`, `diagnosing-bugs`, `domain-modeling`, `emil-design-eng`, `find-animation-opportunities`, `graphify`, `grill-me`, `grim-prompter`, `humanizer`, `impeccable`, `improve-codebase-architecture`, `jury`, `karpathy-guidelines`, `minimalist-ui`, `mobile-native`, `motion`, `persona-critique`, `ponytail`, `ponytail-debt`, `refero-design`, `research`, `review-animations`, `setup-matt-pocock-skills`, `shieldcn-badges`, `slopmonster`, `superpowers`, `watch`.
-- **Integrated NovaSlate Specialists (25):**
-  - *Non-colliding (6):* `arena`, `ponytail-audit`, `ponytail-gain`, `ponytail-help`, `ponytail-review`, `video-analyzer`.
-  - *Conflict-resolved (19):* `novaslate-animate`, `novaslate-animation-vocabulary`, `novaslate-codebase-design`, `novaslate-design-taste-frontend`, `novaslate-diagnosing-bugs`, `novaslate-domain-modeling`, `novaslate-emil-design-eng`, `novaslate-find-animation-opportunities`, `novaslate-improve-codebase-architecture`, `novaslate-karpathy-guidelines`, `novaslate-minimalist-ui`, `novaslate-mobile-native`, `novaslate-ponytail`, `novaslate-ponytail-debt`, `novaslate-research`, `novaslate-review-animations`, `novaslate-setup-matt-pocock-skills`, `novaslate-shieldcn-badges`, `novaslate-slopmonster`.
-  - *Consolidated Canonical (1):* `impeccable` (fully unified into canonical `.agents/skills/r2/skills/impeccable/`).
-- **Constraint:** Keep root `.agents/skills/` clean (only the 6 command skills). All 59 specialist implementations stay strictly inside `.agents/skills/r2/skills/`. Verify registry synchronization in [.agents/skills/r2/registry/skills.json](.agents/skills/r2/registry/skills.json).
+Ensure all 45 specialist skills reside in [.agents/skills/r2/skills/](.agents/skills/r2/skills/):
+- **Core & Engineering (21):** `arena`, `codebase-design`, `context7`, `diagnosing-bugs`, `domain-modeling`, `graphify`, `grill-me`, `grim-prompter`, `humanizer`, `improve-codebase-architecture`, `karpathy-guidelines`, `persona-critique`, `ponytail`, `ponytail-audit`, `ponytail-debt`, `ponytail-gain`, `ponytail-help`, `ponytail-review`, `research`, `slopmonster`, `superpowers`.
+- **Frontend & Motion (19):** `animate`, `animation-vocabulary`, `apple-design`, `awwwards`, `brag-slim`, `design-taste-frontend`, `emil-design-eng`, `find-animation-opportunities`, `impeccable`, `jury`, `minimalist-ui`, `mobile-native`, `motion`, `refero-design`, `review-animations`, `setup-matt-pocock-skills`, `shieldcn-badges`, `video-analyzer`, `watch`.
+- **CAD & 3D Printing (5):** `3d-print-skill`, `cad-agent`, `cadquery-modeling`, `cad-skill`, `three-d-printer`.
+- **Constraint:** Keep root `.agents/skills/` clean (only the 7 command skills: `/r2`, `/r2:init`, `/r2:code`, `/r2:motion`, `/r2:web`, `/r2:debug`, `/r2:3d`). All 45 specialist implementations stay strictly inside `.agents/skills/r2/skills/`. Verify registry synchronization in [.agents/skills/r2/registry/skills.json](.agents/skills/r2/registry/skills.json).
 
 ### Step 3: Setup & Onboarding Workflows
 Execute the standard scaffolding tasks in order:
@@ -62,18 +60,21 @@ Execute the standard scaffolding tasks in order:
    - Delegate to `.agents/skills/r2/skills/setup-matt-pocock-skills/` to configure issue tracker conventions (`gh issue create` or local markdown) and domain doc locations (`GLOSSARY.md`, `docs/adr/`).
    - Update `AGENTS.md` with concise agent instructions without overwriting existing user guidelines.
 
-4. **Lock Project Requirements via `/grill-me` (One-Time Execution):**
-   - Check if project profile exists at `.agents/skills/r2/registry/project-profile.json`.
-   - **If the profile already exists:** Skip interrogation and read cached requirements.
-   - **If the project is unconfigured:** Run the Socratic interview via `.agents/skills/r2/skills/grill-me/` to clarify scope, constraints, and non-negotiables. Persist answers to:
-     ```json
-     .agents/skills/r2/registry/project-profile.json
-     ```
-   - Future `/r2:init` runs will reuse this profile without re-prompting the user.
+4. **Lock Project Requirements & Rules via `.r2/` (Strict State Isolation):**
+   - **Zero Specialist Duplication:** Project-specific rules, constraints, and overrides are stored strictly inside `.r2/` (e.g., `.r2/project-profile.json` and `.r2/rules.md`). NEVER duplicate or fork specialist skills into global `specialists/`.
+   - Check if project profile exists at `.r2/project-profile.json`:
+     - **If the profile already exists:** Skip interrogation and read cached requirements.
+     - **If the project is unconfigured:** Run the Socratic interview via `.agents/skills/r2/skills/grill-me/` to clarify scope, constraints, and non-negotiables. Persist answers to:
+       ```json
+       .r2/project-profile.json
+       ```
+   - Scaffold project-specific guidelines in `.r2/rules.md` for workspace architectural invariants, technology overrides, and custom constraints.
+   - Initialize `.r2/REVIEW.md` for bug prevention rules. Whenever `/r2:debug` resolves an issue, it appends a 1-line rule to `.r2/REVIEW.md` that all future orchestrators check automatically.
+   - If CAD / 3D printing is detected, initialize `.r2/hardware-profile.json` with printer bed boundaries, nozzle dimensions, and material shrinkage preferences for `/r2:3d`.
 
 ### Step 4: ECC Rule Initialization & Integrity Verification
 1. **Detect Project Technologies:**
-   Inspect workspace for active technology indicators (`package.json`, `tsconfig.json`, `pyproject.toml`, file extensions).
+   Inspect workspace for active technology indicators (`package.json`, `tsconfig.json`, `pyproject.toml`, CAD files, file extensions).
 2. **Verify Installed Rule Integrity:**
    Verify byte-for-byte fidelity and SHA-256 hashes of installed rule files against [.agents/skills/r2/rules/manifest.json](.agents/skills/r2/rules/manifest.json):
    ```powershell

@@ -19,11 +19,12 @@ def get_repo_root():
             break
         if os.path.isdir(os.path.join(parent, ".agents")):
             return parent
+        if os.path.isdir(os.path.join(parent, "engine", "registry")) and os.path.isdir(os.path.join(parent, "specialists")):
+            return parent
         cur = parent
-    cur = os.path.abspath(__file__)
-    for _ in range(5):
-        cur = os.path.dirname(cur)
-    return cur
+    # Fallback: navigate up two levels from engine/scripts to repo root
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.dirname(os.path.dirname(script_dir))
 
 def check_gh_auth():
     try:
@@ -72,9 +73,21 @@ def inspect_project_tech(workspace_root):
     else:
         # Check if python files exist in workspace
         for root, dirs, files in os.walk(workspace_root):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
             if any(f.endswith(".py") for f in files):
                 techs.add("python")
                 break
+
+    # Check CAD / 3D printing
+    if os.path.isdir(os.path.join(workspace_root, "cad")) or os.path.exists(os.path.join(workspace_root, ".r2", "hardware-profile.json")):
+        techs.add("cad")
+        techs.add("3d")
+    for root, dirs, files in os.walk(workspace_root):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
+        if any(f.endswith((".step", ".stl", ".3mf", ".scad")) for f in files):
+            techs.add("cad")
+            techs.add("3d")
+            break
 
     # Check go, rust, c++
     if os.path.exists(os.path.join(workspace_root, "go.mod")):
@@ -85,7 +98,7 @@ def inspect_project_tech(workspace_root):
     return sorted(list(techs))
 
 def determine_relevant_specialists(techs, all_specialists):
-    # Core specialists always installed
+    # Core specialists always installed (21)
     core = {
         "graphify", "ponytail", "ponytail-debt", "ponytail-audit", "ponytail-review",
         "ponytail-gain", "ponytail-help", "karpathy-guidelines", "persona-critique",
@@ -93,6 +106,7 @@ def determine_relevant_specialists(techs, all_specialists):
         "improve-codebase-architecture", "diagnosing-bugs", "context7",
         "humanizer", "slopmonster", "arena", "research", "grim-prompter"
     }
+    # Frontend and motion specialists (19)
     frontend = {
         "animate", "animation-vocabulary", "apple-design", "awwwards", "brag-slim",
         "design-taste-frontend", "emil-design-eng", "find-animation-opportunities",
@@ -100,13 +114,18 @@ def determine_relevant_specialists(techs, all_specialists):
         "refero-design", "review-animations", "setup-matt-pocock-skills",
         "shieldcn-badges", "video-analyzer", "watch"
     }
+    # CAD and 3D printing specialists (5)
+    cad = {
+        "3d-print-skill", "cad-agent", "cadquery-modeling", "cad-skill", "three-d-printer"
+    }
 
     selected = set(core)
     if "web" in techs or "react" in techs or "vue" in techs or "nextjs" in techs or "typescript" in techs:
         selected.update(frontend)
+    if "cad" in techs or "3d" in techs or "cadquery" in techs or "3d-printing" in techs:
+        selected.update(cad)
 
-    # Filter to existing in all_specialists
-    valid_selected = [s for s in all_specialists if s in selected or s.replace("novaslate-", "") in selected]
+    valid_selected = [s for s in all_specialists if s in selected]
     return sorted(valid_selected)
 
 def download_specialists_from_gh(target_specialists, dest_dir):
@@ -114,7 +133,6 @@ def download_specialists_from_gh(target_specialists, dest_dir):
     temp_dir = tempfile.mkdtemp(prefix="r2_specialists_")
     try:
         print(f"Fetching specialist definitions from {REPO}...")
-        # Clone with depth 1
         clone_cmd = ["gh", "repo", "clone", REPO, temp_dir, "--", "--depth", "1"]
         res = subprocess.run(clone_cmd, capture_output=True, text=True)
         if res.returncode != 0:
@@ -146,9 +164,21 @@ def main():
     args = parser.parse_args()
 
     workspace = get_repo_root()
-    dest_dir = os.path.join(workspace, ".agents", "skills", "r2", "skills")
-    cache_dir = os.path.join(workspace, ".agents", "skills", "r2", "specialists_cache")
-    registry_file = os.path.join(workspace, ".agents", "skills", "r2", "registry", "skills.json")
+    installed_registry = os.path.join(workspace, ".agents", "skills", "r2", "registry", "skills.json")
+    source_registry = os.path.join(workspace, "engine", "registry", "skills.json")
+
+    if os.path.exists(installed_registry):
+        registry_file = installed_registry
+        dest_dir = os.path.join(workspace, ".agents", "skills", "r2", "skills")
+        cache_dir = os.path.join(workspace, ".agents", "skills", "r2", "specialists_cache")
+    elif os.path.exists(source_registry):
+        registry_file = source_registry
+        dest_dir = os.path.join(workspace, "specialists")
+        cache_dir = os.path.join(workspace, "specialists")
+    else:
+        registry_file = installed_registry
+        dest_dir = os.path.join(workspace, ".agents", "skills", "r2", "skills")
+        cache_dir = os.path.join(workspace, ".agents", "skills", "r2", "specialists_cache")
 
     with open(registry_file, "r", encoding="utf-8") as f:
         reg = json.load(f)
@@ -189,9 +219,10 @@ def main():
             src_s = os.path.join(cache_dir, s)
             dest_s = os.path.join(dest_dir, s)
             if os.path.exists(src_s):
-                if os.path.exists(dest_s):
+                if os.path.exists(dest_s) and os.path.abspath(src_s) != os.path.abspath(dest_s):
                     shutil.rmtree(dest_s)
-                shutil.copytree(src_s, dest_s)
+                if os.path.abspath(src_s) != os.path.abspath(dest_s):
+                    shutil.copytree(src_s, dest_s)
                 installed.append(s)
     else:
         installed = download_specialists_from_gh(target_specialists, dest_dir)

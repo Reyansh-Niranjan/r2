@@ -1,0 +1,58 @@
+"""Closed-form engineering equations for mechanisms and welded or printed parts, each with its SI units, validity limits and source.
+
+    from cadagent import formulas as fx
+    fx.snap_arm(length=0.020, thickness=0.0016, width=0.006, deflection=0.0012, modulus=1.46e9,
+                allowable_strain=0.023)                     # root strain, force, stiffness, pass/fail
+    fx.spring_rate(wire_diameter=0.8e-3, mean_diameter=6e-3, active_coils=8, shear_modulus=79.3e9)
+    fx.preload_from_torque(torque=0.6, diameter=3e-3)       # N, with the nut factor 0.2
+    fx.torsion_snap_bar(length=0.015, width=0.004, thickness=0.0012, twist=0.14, modulus=2.68e9,
+                        allowable_strain=0.0095, lever=0.010, bars=2)   # shear strain, torque, force at the lever
+    fx.rating_life(dynamic_rating=7280, load=600)           # a 6201's L10 at 600 N, millions of revolutions
+    fx.weld_group_stress(fx.weld_line_box(0.0508, 0.0508), leg=3e-3, shear_y=1500, moment_x=400)   # throat stress, Pa
+    fx.catalogue()                                          # every formula: units, limits, source
+
+Agents call these instead of re-deriving them; the website's demonstrations call the browser port of the same
+functions (``webkit/calculators/formulas.js``), and ``tools/formula_vectors.py --check`` keeps the two in step. A closed form is
+not proof of fit or strength: each result holds only within the limits it states, and a printed part is weaker
+across its layers than any isotropic formula assumes. Test the part. See docs/formulas.md.
+"""
+from cadagent.formulas._registry import REGISTRY, SOURCES, Formula, catalogue
+from cadagent.formulas.bearings import (CLEARANCES, DEEP_GROOVE_TABLE, RELIABILITY_TABLE, ball_raceway_contact,
+                                        critical_amplitude, deep_groove_factors, deep_groove_load, duty_cycle_load,
+                                        equivalent_load, harris_factor, hertz_point_contact, life_exponent, life_hours,
+                                        miner_life, rating_life, reliability_factor, required_dynamic_rating,
+                                        revolution_fractions, rolling_travel, rumbarger_factor, static_equivalent_load,
+                                        static_rating_iso76, static_safety, stribeck_ball_load, varying_load_mean)
+from cadagent.formulas.beams import (DESIGNS, SUPPORTS, beam_stiffness, cantilever_shape, cantilever_strain_profile,
+                                     cantilever_taper_factor, cantilever_thickness_profile, cantilever_tip_deflection,
+                                     hollow_rect_second_moment, hollow_rect_section_modulus, rect_second_moment,
+                                     round_tube_second_moment, round_tube_section_modulus, snap_arm,
+                                     snap_deflection_force, snap_root_strain)
+from cadagent.formulas.inserts import (arc_path_radius, arc_printed_diameter, facet_diameter, insert_clamp_path,
+                                       insert_displaced_volume, insert_limited_torque, insert_shear_force,
+                                       insert_shear_torque, overflow_volume, polyhole)
+from cadagent.formulas.limiters import (PRELOAD_SHARE, annulus_stress, bearing_area, frustum_stiffness,
+                                        limiter_plastic_load, limiter_stack, preload_retained,
+                                        preload_retained_limited, press_fit_force, press_fit_pressure, proof_load,
+                                        washer_bearing)
+from cadagent.formulas.linkages import (fivebar_inputs, fivebar_jacobians, fivebar_point, fourbar_angles,
+                                        fourbar_input_limits, grashof, transmission_angle)
+from cadagent.formulas.rivets import bearing_force, lap_joint, rivet_shear_force, solid_sheet_force, tearing_force
+from cadagent.formulas.screws import (BOSS_ENGAGEMENT, BOSS_HOLE, BOSS_OUTSIDE, NUT_FACTORS, TIGHTEN_OVER_DRIVE,
+                                      TIGHTEN_OVER_STRIP, boss_hoop_stress, nut_factor, preload_from_torque,
+                                      screw_boss, tensile_stress_area, thread_radial_pressure, thread_shear_areas,
+                                      thread_strip_force, torque_for_preload)
+from cadagent.formulas.springs import bergstrasser_factor, spring_index, spring_rate, spring_shear_stress
+from cadagent.formulas.thermal import (fan_curve_line, fan_operating_point, fan_stall_flow, fans_in_parallel,
+                                       fans_in_series, film_resistance, system_coefficient, wall_heat_flow,
+                                       wall_resistance)
+from cadagent.formulas.torsion import (SMALL_TWIST_TRAPEZE, shear_modulus, torsion_bar_stiffness,
+                                       torsion_bar_twist, torsion_constant_rect, torsion_constant_round, torsion_shear_strain_rect,
+                                       torsion_shear_stress_rect, torsion_shear_stress_round, torsion_snap_bar)
+from cadagent.formulas.welds import (METHODS, base_metal_shear_strength, fillet_size_limits, fillet_throat,
+                                     fillet_throat_area, fillet_throat_stress, fillet_weld_check, weld_group_stress,
+                                     weld_line_box, weld_line_circle, weld_line_parallel, weld_metal_strength)
+
+__all__ = sorted(REGISTRY) + ["CLEARANCES", "DEEP_GROOVE_TABLE", "RELIABILITY_TABLE", "life_exponent", "BOSS_ENGAGEMENT", "BOSS_HOLE", "BOSS_OUTSIDE", "DESIGNS", "NUT_FACTORS", "PRELOAD_SHARE", "REGISTRY",
+                              "SMALL_TWIST_TRAPEZE", "SOURCES", "SUPPORTS", "TIGHTEN_OVER_DRIVE", "TIGHTEN_OVER_STRIP",
+                              "Formula", "METHODS", "catalogue"]

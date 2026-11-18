@@ -1,0 +1,1017 @@
+import {topicSprite} from '../../tools/site/compiler/site-explore-shell.mjs';
+// Build cad-agent.valpatel.com into a temporary folder from HEAD and check what would be published.
+import test from 'node:test';
+import { YAML } from './npm-context.mjs';
+import assert from 'node:assert/strict';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
+import { headersFor, parseHeaders } from '../../tools/site/preview-site.mjs';
+import { createPublication, selectPages, folderMapSources, folderMapPath } from '../../tools/site/publication.mjs';
+import { builtSite } from './built-site.mjs';
+import {markdown as mapMarkdown} from '../../tools/site/compiler/site-repo-map.mjs';
+
+const root = path.resolve(import.meta.dirname, '../..');
+const execFileAsync = promisify(execFile);
+const tmp = await mkdtemp(path.join(os.tmpdir(), 'cad-agent-website-'));
+const build = dir => execFileSync(process.execPath, ['tools/site/build-site.mjs', '--out', dir], { cwd: root }).toString();
+const site = await builtSite('cad-agent-website-a-');            // CAD_AGENT_SITE, or a fresh build of HEAD
+const out = site.dir, buildLog = site.log;
+test.after(() => Promise.all([rm(tmp, { recursive: true, force: true }), site.done()]));
+
+const files = (await readdir(out, { recursive: true, withFileTypes: true })).filter(e => e.isFile())
+  .map(e => path.relative(out, path.join(e.parentPath, e.name)).split(path.sep).join('/'));
+const html = files.filter(f => f.endsWith('.html'));
+const git = (...a) => execFileSync('git', a, { cwd: root }).toString();
+const { publicPath } = createPublication(JSON.parse(git('show', 'HEAD:tools/site/page-sources.json')));
+// Cloudflare Pages resolution: /x serves x.html, /dir/ serves dir/index.html, files as they are.
+const resolve = url => {
+  const p = decodeURIComponent(url.split('#')[0].split('?')[0]).replace(/^\//, '');
+  return [p, p + '.html', p.replace(/\/?$/, '/index.html').replace(/^\//, '')].find(c => files.includes(c));
+};
+// Anchor targets from real tags only: `<h2 id="x">` shown in a code sample is text, not a target.
+const idsIn = text => new Set([...text.matchAll(/<[a-z][^>]*>/gi)].flatMap(([tag]) => [...tag.matchAll(/\sid="([^"]+)"/gi)].map(m => m[1])));
+const ids = async f => idsIn(await readFile(path.join(out, f), 'utf8'));
+
+test('only committed files are published, byte for byte', async () => {
+  const prefix = 'tools/site/assets/';
+  const owned = git('ls-tree', '-r', '-z', '--name-only', 'HEAD', prefix).split('\0').filter(Boolean);
+  const sources = owned.filter(f => !f.endsWith('/README.md'));
+  const assets = new Map(sources.map(f => ['web/' + f.slice(prefix.length), f]));
+  const generated=new Map([['web/topic-icons.svg',topicSprite(YAML.parse(git('show','HEAD:docs/areas.yaml')))]]);
+  for(const [file,expected] of generated)assert.equal(await readFile(path.join(out,file),'utf8'),expected,'generated topic art matches committed taxonomy');
+  const webOut = files.filter(f => f.startsWith('web/') && f !== 'web/snap-demo.css' && !generated.has(f));
+  assert.deepEqual(webOut.sort(), [...assets.keys()].sort());
+  for (const [publicFile, source] of assets) assert.ok((await readFile(path.join(out, publicFile))).equals(execFileSync('git', ['show', `HEAD:${source}`], { cwd: root })), publicFile);
+  for (const source of owned.filter(f => f.endsWith('/README.md'))) {
+    const twin = folderMapPath(source);
+    assert.ok(files.includes(twin), `${source} keeps its compiled Markdown owner map`);
+    assert.ok(files.includes(twin.replace(/\.md$/, '.html')), `${source} keeps its native owner page`);
+    assert.ok(!files.includes('web/' + source.slice(prefix.length)), `${source} is not duplicated with broken source-relative links`);
+  }
+});
+
+// Plant a page over a real one in a scratch worktree. The real page's figures (docs/pages.yaml) would look for its
+// headings in the planted text, so its entry there goes too.
+const plant = async (wt, page, text) => {
+  await writeFile(path.join(wt, page), text);
+  const spec = path.join(wt, 'docs/pages.yaml');
+  const doc = YAML.parseDocument(await readFile(spec, 'utf8'));
+  doc.delete(page);
+  await writeFile(spec, doc.toString());
+};
+
+test('a dirty checkout publishes HEAD, and a draft says it has local changes', async () => {
+  // A scratch worktree of HEAD with an edited stylesheet, an edited doc and an untracked page planted in it.
+  const wt = path.join(tmp, 'wt');
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', wt, 'HEAD'], { cwd: root });
+  try {
+    await writeFile(path.join(wt, 'tools/site/assets/site.css'), 'body{display:none}\n');
+    await writeFile(path.join(wt, 'docs/planted.md'), '# Planted\n\nnot committed\n');
+    await writeFile(path.join(wt, 'tools/site/assets/planted-module.js'), 'export const draftOnly = true;\n');
+    execFileSync('git',['add','tools/site/assets/planted-module.js'],{cwd:wt});
+    await plant(wt, 'docs/toolkit.md', '# Toolkit\n\nlocal edit <scr<script>x</script>ipt>window.__x=1</script>\n');
+    const run = (...a) => execFileSync(process.execPath, ['tools/site/build-site.mjs', '--root', wt, ...a], { cwd: root }).toString();
+    const clean = path.join(tmp, 'clean'), draft = path.join(tmp, 'draft');
+    run('--out', clean);
+    assert.equal(await readFile(path.join(clean, 'web/site.css'), 'utf8'), git('show', 'HEAD:tools/site/assets/site.css'));
+    assert.ok(!existsSync(path.join(clean, 'docs/planted.html')), 'an untracked page was published');
+    assert.ok(!existsSync(path.join(clean, 'web/planted-module.js')), 'a staged-only module was published as committed output');
+    assert.doesNotMatch(await readFile(path.join(clean, 'docs/toolkit.html'), 'utf8'), /local edit/);
+    // Drawn by the reader's browser: this stylesheet would redraw every diagram (it is in their cache key) to no purpose.
+    run('--worktree', '--client-diagrams', '--out', draft);
+    const toolkit = await readFile(path.join(draft, 'docs/toolkit.html'), 'utf8');
+    assert.match(toolkit, /local edit/);
+    assert.match(toolkit, /\+ local changes/);
+    assert.match(toolkit, /This page has uncommitted changes/);
+    assert.equal(await readFile(path.join(draft, 'web/site.css'), 'utf8'), 'body{display:none}\n');
+    assert.equal(await readFile(path.join(draft,'web/planted-module.js'),'utf8'),'export const draftOnly = true;\n','draft includes staged new assets');
+    assert.ok(!existsSync(path.join(draft,'docs/planted.html')),'draft still excludes untracked files');
+    assert.doesNotMatch(toolkit, /<script>|window\.__x=1<\/script>/, 'a nested script survived the sanitizer');
+    assert.throws(() => run('--release', '--out', path.join(tmp, 'rel')), /clean working tree/);
+    await mkdir(path.join(wt, 'web'), { recursive: true });
+    await writeFile(path.join(wt, 'web/site.css'), 'STALE_ROOT_ASSET');
+    await rm(path.join(wt, 'tools/site/assets/site.css'));
+    assert.throws(() => run('--worktree', '--client-diagrams', '--out', draft), error =>
+      String(error.stderr).includes('ENOENT') && String(error.stderr).includes('tools/site/assets/site.css'),
+    'a stale web/site.css must not hide a missing current stylesheet');
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: root });
+  }
+});
+
+// This checks the documented provider exclusion contract in actual compiled pages, not an emulation of the edge.
+// A post-release read of ordinary public URLs must separately prove that the provider preserves the authored text.
+function assertEmailExclusion(text, label) {
+  const bodies = [...text.matchAll(/<body\b[^>]*>([\s\S]*?)<\/body>/g)];
+  assert.equal(bodies.length, 1, `${label}: one HTML body`);
+  assert.equal((text.match(/<!--email_off-->/g) || []).length, 1, `${label}: one exclusion start`);
+  assert.equal((text.match(/<!--\/email_off-->/g) || []).length, 1, `${label}: one exclusion end`);
+  assert.match(bodies[0][1], /^<!--email_off-->[\s\S]*<!--\/email_off-->$/, `${label}: exclusion covers the entire authored body`);
+}
+
+test('compiled HTML preserves package identifiers inside the provider email exclusion', async () => {
+  // kit/web contain copied upstream HTML, not this publisher's authored page frame.
+  const pages = html.filter(f => !f.startsWith('kit/') && !f.startsWith('web/'));
+  const example = 'repo/folders/d-software/d-cadagent/d-webkit/README.html';
+  for (const required of ['index.html', 'catalog.html', 'docs/map.html', example]) assert.ok(pages.includes(required), required);
+  for (const file of pages) assertEmailExclusion(await readFile(path.join(out, file), 'utf8'), file);
+  const page = await readFile(path.join(out, example), 'utf8');
+  const source = git('show', 'HEAD:software/cadagent/webkit/README.md');
+  for (const name of ['three', 'mermaid', 'fflate']) {
+    const identifiers = [...new Set(source.match(new RegExp(`${name}@[0-9]+(?:\\.[0-9]+)+`, 'g')))];
+    assert.equal(identifiers.length, 1, `${name}: actual source package identifier`);
+    assert.ok(page.includes(`<code>${identifiers[0]}</code>`), `${identifiers[0]} must remain readable without a provider decoder`);
+  }
+  assert.doesNotMatch(page, /__cf_email__|\/cdn-cgi\/l\/email-protection/);
+  for (const [label, changed] of [
+    ['missing start', page.replace('<!--email_off-->', '')],
+    ['missing end', page.replace('<!--/email_off-->', '')],
+    ['duplicate start', page.replace('<!--email_off-->', '<!--email_off--><!--email_off-->')],
+    ['late start', page.replace('<!--email_off-->', '').replace('<main ', '<!--email_off--><main ')],
+    ['early end', page.replace('<!--/email_off-->', '').replace('</main>', '</main><!--/email_off-->')],
+  ]) {
+    assert.notEqual(changed, page, label);
+    assert.throws(() => assertEmailExclusion(changed, label), undefined, label);
+  }
+});
+
+test('code samples keep their text, and every code block has a copy button', async () => {
+  const dossier = await readFile(path.join(out, 'docs/dossier.html'), 'utf8');
+  assert.match(dossier, /onto=None/, 'the sanitizer ate text inside code');
+  const toolkit = await readFile(path.join(out, 'docs/toolkit.html'), 'utf8');
+  const pres = (toolkit.match(/<pre>/g) || []).length, wrapped = (toolkit.match(/<cad-copy><pre>/g) || []).length;
+  const diagrams = (toolkit.match(/<pre><code class="language-mermaid">/g) || []).length;
+  assert.ok(pres > 3 && wrapped === pres - diagrams, `${wrapped} of ${pres} code blocks have a copy button`);
+  assert.match(await readFile(path.join(out, 'index.html'), 'utf8'), /<cad-copy class="agent-copy"[^>]*><pre class="agent-box"/);
+  assert.ok(files.includes('kit/documents/copy.js'));
+});
+
+test('home, README and agent indexes reach the canonical checked installers (#278, #282, #322)', async () => {
+  const [paste, ...rest] = git('show', 'HEAD:docs/agent-prompt.txt').replace(/\n$/, '').split('\n');
+  const guide = rest.join('\n').trim();
+  const index = await readFile(path.join(out, 'index.html'), 'utf8');
+  const card = index.match(/<section class="use-band" id="use-it"[\s\S]*?<\/section>/)?.[0];
+  assert.ok(card, 'the home page has the install card');
+  const unesc = t => t.replace(/<\/?b>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+  const boxes = [...card.matchAll(/<pre class="(install-box|agent-box)"[^>]*>([\s\S]*?)<\/pre>/g)].map(m => [m[1], unesc(m[2])]);
+  assert.deepEqual(boxes, [['agent-box', paste]], 'keep the short agent prompt; do not duplicate unchecked script commands');
+  assert.deepEqual([...card.matchAll(/class="install-guide" href="([^"]+)"/g)].map(m => m[1]),
+    ['/docs/agent-workflow#install-unix', '/docs/agent-workflow#install-windows'], 'a canonical checked route per platform');
+  assert.equal(paste.split(' ').length, 8, 'the paste-in line is eight words');
+  assert.ok(index.indexOf('id="use-it"') < index.indexOf('id="outputs"'), 'the card comes before the first band');
+  assert.match(index, /href="#use-it"/, 'the hero links to it');
+  const seen = card.replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/<p class="visually-hidden">[^<]*<\/p>/g, '').replace(/<[^>]+>/g, ' ');
+  const words = unesc(seen).split(/\s+/).filter(Boolean).length;
+  assert.ok(words <= 95, `the card shows ${words} words; keep it near 90`);
+  assert.match(card, /No telemetry\./); assert.match(card, /only when you say yes/);
+  assert.match(card, /href="\/docs\/agent-workflow#install"/, 'the long form is one link away');
+  const tabs = [...card.matchAll(/<input type="radio" name="install-os" id="(os-[a-z]+)"/g)].map(m => m[1]);
+  assert.deepEqual(tabs, ['os-unix', 'os-win']);
+  for (const id of tabs) assert.match(card, new RegExp(`<label for="${id}" class="os-tab`), `${id} has a tab`);
+  assert.doesNotMatch(card, /<img|<use |agent-guide/, 'the badges are text, not product marks; the per-agent guide is gone');
+  const readme = await readFile(path.join(out, 'README.html'), 'utf8');
+  assert.match(readme, /<h1 id="cad-agent"><a href="\/docs\/share-badge"><picture>/, 'the badge is the README heading, not a duplicate wordmark');
+  assert.match(readme, /<title>cad-agent(?: [^<]*)?<\/title>/, 'the catalogue/page title uses the image alt name, not raw HTML');
+  assert.equal((readme.match(/<h1\b/g) || []).length, 1, 'no generated text heading above the cinematic');
+
+  const installPage = resolve('/docs/agent-workflow');
+  assert.ok(installPage, 'the linked installation page is actually published');
+  const installGuide = await readFile(path.join(out, installPage), 'utf8');
+  const hashes = ['install.sh', 'install.ps1'].map(f => createHash('sha256').update(git('show', `HEAD:tools/site/assets/${f}`)).digest('hex'));
+  const checkReaderRoute = (entrance, detail) => {
+    assert.match(entrance, /id="how-to-join-in"/, 'the root has a human invitation');
+    assert.match(entrance, /pinned installer/, 'the root names the checked getting-started route');
+    assert.match(entrance, /href="\/docs\/agent-workflow#install"/, 'installation detail is one click away');
+    assert.match(entrance, /href="\/docs\/agent-workflow#ask-your-assistant"/, 'the canonical prompt is one click away');
+    assert.match(detail, /id="install"/, 'the installation anchor exists in the emitted guide');
+    assert.match(detail, /id="ask-your-assistant"/, 'the assistant anchor exists in the emitted guide');
+    for (const id of ['install-unix', 'install-windows']) assert.ok(detail.includes(`id="${id}"`), 'both platform routes exist');
+    assert.ok(hashes.every(h => detail.includes(h)), 'the linked guide checks the actual installer bytes');
+    for (const guard of ['Installer checksum mismatch', 'Get-FileHash', 'sha256sum', 'shasum -a 256']) {
+      assert.ok(detail.includes(guard), `the linked guide retains ${guard}`);
+    }
+    assert.doesNotMatch(entrance + detail, /(?:curl|irm)[^\n]*\|\s*(?:sh|iex)\b/, 'no unchecked pipe shortcut');
+    assert.ok(detail.includes(paste), 'the linked guide keeps the canonical paste-in line');
+  };
+  checkReaderRoute(readme, installGuide);
+  assert.throws(() => checkReaderRoute(readme, installGuide.replaceAll(paste, 'CONTROL: prompt missing')),
+    /linked guide keeps the canonical paste-in line/, 'a link alone must not hide missing installation content');
+  assert.throws(() => checkReaderRoute(readme, installGuide.replaceAll(hashes[0], 'CONTROL: hash missing')),
+    /checks the actual installer bytes/, 'a guide link alone must not hide a missing checksum');
+  const checkAgentIndex = text => {
+    assert.ok(text.includes('```text\n' + paste + '\n```') && text.includes('```text\n' + guide + '\n```'), 'the index carries the line and how to install and work');
+    assert.ok(text.indexOf('## Install and work with it') < text.indexOf('## Start here'), 'installing comes first');
+    assert.match(text, /\[pinned download and checksum-before-execution block\]\(https:\/\/cad-agent\.valpatel\.com\/docs\/agent-workflow#install\)/,
+      'the preamble reaches the actual canonical checked guide');
+    assert.doesNotMatch(text, /(?:curl|irm)[^\n]*\|\s*(?:sh|iex)\b/, 'no unchecked pipe shortcut anywhere in the generated index');
+  };
+  for (const f of ['llms.txt', 'index.md']) {
+    const text = await readFile(path.join(out, f), 'utf8');
+    checkAgentIndex(text);
+    for (const unchecked of ['curl -fsSL https://cad-agent.valpatel.com/install.sh | sh', 'irm https://cad-agent.valpatel.com/install.ps1 | iex']) {
+      assert.throws(() => checkAgentIndex(text.replace('## Install and work with it', `## Install and work with it\n${unchecked}`)),
+        /no unchecked pipe shortcut/, `${f}: a checked guide must not hide the old unchecked preamble`);
+    }
+  }
+  for (const f of ['install.sh', 'install.ps1']) {
+    assert.equal(await readFile(path.join(out, f), 'utf8'), git('show', `HEAD:tools/site/assets/${f}`), `/${f} is web/${f}`);
+  }
+});
+
+test('pages say when they were last updated and how to give feedback', async () => {
+  const commitDay = git('show', '-s', '--format=%cI', 'HEAD').trim();
+  const lessonDay = git('log', '-1', '--format=%cI', 'HEAD', '--', 'docs/lessons/process/verify-from-source.md').trim();
+  assert.match(await readFile(path.join(out, 'index.html'), 'utf8'), new RegExp(`Last updated <time datetime="${commitDay.replace(/[+]/g,'\\+')}">`));
+  const lesson = await readFile(path.join(out, 'lessons/process/verify-from-source.html'), 'utf8');
+  assert.match(lesson, new RegExp(`Last updated <time datetime="${lessonDay.replace(/[+]/g,'\\+')}">`), 'a page shows its own last change');
+  const fb = lesson.match(/<aside class="feedback"[\s\S]*?<\/aside>/)?.[0];
+  assert.ok(fb, 'doc pages end with the feedback box');
+  const href = fb.match(/href="([^"]+)"/)[1].replace(/&amp;/g, '&');
+  const u = new URL(href);
+  assert.equal(u.origin + u.pathname, 'https://github.com/Valpatel/cad-agent/issues/new');
+  assert.equal(u.searchParams.get('template'), 'feedback.yml');
+  assert.equal(u.searchParams.get('page'), 'https://cad-agent.valpatel.com/lessons/process/verify-from-source');
+  assert.match(fb, /edit\/dev\/docs\/lessons\/process\/verify-from-source\.md/);
+  const form = await readFile(path.join(root, '.github/ISSUE_TEMPLATE/feedback.yml'), 'utf8');
+  assert.match(form, /id: page\b/, 'the issue form has the field the link fills in');
+});
+
+test('builds are reproducible: two builds of the same commit are identical', async () => {
+  const again = path.join(tmp, 'b');
+  build(again);
+  for (const f of files) assert.ok((await readFile(path.join(out, f))).equals(await readFile(path.join(again, f))), f);
+});
+
+test('every internal link and anchor in the HTML resolves', async () => {
+  assert.deepEqual([...idsIn('<h2 id="real">x</h2><pre><code>&lt;h2 id="in-code"&gt;</code></pre>')], ['real']);
+  const missing = [];
+  for (const f of html) {
+    if (f.startsWith('kit/')) continue;                                // the kit's own pages are tested with the kit
+    const text = await readFile(path.join(out, f), 'utf8');
+    const urls = [...text.matchAll(/<[a-z][^>]*>/gi)].flatMap(([tag]) =>   // real tags only: code text is not a link
+      [...tag.matchAll(/\s(?:href|src)="([^"]+)"/gi)].map(m => m[1].replace(/&amp;/g, '&')));
+    for (const url of urls) {
+      if (/^(?:[a-z]+:|\/\/)/i.test(url)) continue;
+      const abs = url.startsWith('#') ? '/' + f.replace(/\.html$/, '') + url : new URL(url, 'https://x/' + f).pathname + (url.includes('#') ? '#' + url.split('#')[1] : '');
+      const target = resolve(abs);
+      if (!target) { missing.push(`${f} → ${url}`); continue; }
+      const hash = abs.split('#')[1];
+      if (hash && target.endsWith('.html') && !(await ids(target)).has(decodeURIComponent(hash))) missing.push(`${f} → ${url} (anchor)`);
+    }
+  }
+  assert.deepEqual(missing, []);
+});
+
+test('pages have one h1 and heading ids follow GitHub anchors', async () => {
+  for (const f of html.filter(f => !f.startsWith('kit/'))) {
+    const n = ((await readFile(path.join(out, f), 'utf8')).match(/<h1[\s>]/g) || []).length;
+    assert.equal(n, 1, `${f} has ${n} h1`);
+  }
+  // GitHub's rule: entities decoded and punctuation dropped (no "39" from an encoded apostrophe), runs of spaces kept.
+  for (const f of html.filter(f => !f.startsWith('kit/'))) {
+    const text = await readFile(path.join(out, f), 'utf8');
+    for (const [, id, inner] of text.matchAll(/<h[1-6] id="([^"]*)">([\s\S]*?)<\/h[1-6]>/g)) {
+      assert.doesNotMatch(id, /(?:^|-)(?:39|quot|amp)(?:-|s-|$)/, `${f}: ${id}`);
+      if (/[’'&]/.test(inner) || /&#39;|&amp;|&quot;/.test(inner)) assert.doesNotMatch(id, /\d{2}/.test(inner) ? /^$/ : /39/, `${f}: ${id}`);
+    }
+  }
+  assert.ok((await ids('lessons/process/README.html')).has('lessons--process'), 'runs of spaces are not merged');
+});
+
+test('Markdown twins and both agent indexes carry working links', async () => {
+  const full = await readFile(path.join(out, 'llms-full.txt'), 'utf8');
+  const relative = [...full.replace(/```[\s\S]*?```/g, '').matchAll(/\]\(([^)\s]+)/g)].map(m => m[1]).filter(u => !/^(?:[a-z]+:|#)/i.test(u));
+  assert.deepEqual(relative, [], 'llms-full.txt is one file: its links must be absolute');
+  const broken = [];
+  for (const f of [...files.filter(f => f.endsWith('.md')), 'llms.txt', 'llms-full.txt']) {
+    const md = (await readFile(path.join(out, f), 'utf8')).replace(/```[\s\S]*?```|`+[^`]*`+/g, '');
+    const urls = [...md.matchAll(/\]\(([^)\s#]+)(?:#[^)\s]*)?(?:\s+"[^"]*")?\)/g)].map(m => m[1]);
+    for (const [tag] of md.matchAll(/<[a-z][^>]*>/gi)) {
+      for (const [, url] of tag.matchAll(/\s(?:href|src)="([^"]+)"/gi)) urls.push(url.replace(/&amp;/g, '&'));
+      for (const [, srcset] of tag.matchAll(/\ssrcset="([^"]+)"/gi))
+        urls.push(...srcset.split(',').map(item => item.trim().split(/\s+/)[0]));
+    }
+    for (const url of urls) {
+      const target = new URL(url, `https://cad-agent.valpatel.com/${f}`);
+      if (target.origin !== 'https://cad-agent.valpatel.com') continue;
+      if (!resolve(target.pathname)) broken.push(`${f} → ${url}`);
+    }
+  }
+  assert.deepEqual(broken, []);
+});
+
+test('sitemap and catalogue use the URLs Pages serves without a redirect', async () => {
+  const sitemap = await readFile(path.join(out, 'sitemap.xml'), 'utf8');
+  const urls = [...sitemap.matchAll(/<loc>https:\/\/cad-agent\.valpatel\.com([^<]*)<\/loc>/g)].map(m => m[1]);
+  assert.ok(urls.length > 40);
+  for (const u of urls) { assert.doesNotMatch(u, /\.html$/); assert.ok(resolve(u), u); }
+  const catalog = JSON.parse(await readFile(path.join(out, 'catalog.json'), 'utf8'));
+  for (const i of catalog.items.filter(i => i.url.startsWith('https://cad-agent.valpatel.com'))) {
+    assert.doesNotMatch(i.url, /\.html$/, i.name);
+    assert.ok(resolve(i.url.slice('https://cad-agent.valpatel.com'.length)), i.url);
+  }
+});
+
+test('catalogue statuses are honest', async () => {
+  const catalog = JSON.parse(await readFile(path.join(out, 'catalog.json'), 'utf8'));
+  const pyproject = (await readFile(path.join(root, 'pyproject.toml'), 'utf8')).toLowerCase();
+  for (const lib of catalog.items.filter(i => i.type === 'library' && i.status === 'used')) {
+    const pkg = lib.name.split('/').pop().toLowerCase();
+    assert.match(pyproject, new RegExp(`"${pkg}[>=<\\[" ]`), `${lib.name} is marked used but is not a dependency`);
+  }
+  const cli = await readFile(path.join(root, 'software/cadagent/cli.py'), 'utf8');
+  for (const t of catalog.items.filter(i => i.type === 'tool')) assert.ok(cli.includes(`"${t.name.replace('cad-agent ', '')}"`), t.name);
+  const index = await readFile(path.join(out, 'index.html'), 'utf8');
+  for (const [, cmd] of index.matchAll(/<code>cad-agent ([a-z0-9-]+)<\/code>/g))
+    assert.ok(catalog.items.some(i => i.name === `cad-agent ${cmd}`), `landing page names cad-agent ${cmd}, which does not exist`);
+  const showcases = index.match(/<section class="section built-with"[^>]*>[\s\S]*?<\/section>/)?.[0] || '';
+  const articles = [...showcases.matchAll(/<article>[\s\S]*?<\/article>/g)].map(m => m[0]);
+  for (const name of ['gyropup','j501']) {
+    const { source } = JSON.parse(await readFile(path.join(out, `web/models/${name}.json`), 'utf8'));
+    const article = articles.find(a => a.includes(`src="/web/models/${name}.json"`));
+    assert.ok(article, `the displayed ${name} model has its own project article`);
+    assert.ok(article.includes(`href="${source.repo}/tree/${source.revision}"`), `the displayed ${name} assembly links its actual immutable CAD source`);
+    assert.ok(!article.includes('exported from its STEP files'), 'do not relabel historical engineering exports as current collector evidence');
+  }
+  for (const i of catalog.items.filter(i => i.type === 'upstream')) assert.ok(i.summary, `${i.name} has no summary`);
+});
+
+test('headers: stable assets revalidate, each header has one rule, and inline scripts are allowed by hash', async () => {
+  const text = await readFile(path.join(out, '_headers'), 'utf8');
+  const rules = parseHeaders(text);
+  const vendorPaths = files.filter(f => f.startsWith('kit/vendor/')).map(f => '/' + f);
+  assert.ok(vendorPaths.includes('/kit/vendor/fonts/fonts.css') && vendorPaths.includes('/kit/vendor/fonts/SOURCE.json'));
+  for (const p of ['/', '/docs/toolkit', '/docs/toolkit.md', '/llms.txt', '/install.sh', '/install.ps1', '/kit/model/viewer', ...vendorPaths]) {
+    const seen = {};
+    for (const r of rules) if (r.pattern.test(p)) for (const [k] of r.headers) seen[k.toLowerCase()] = (seen[k.toLowerCase()] || 0) + 1;
+    for (const [k, n] of Object.entries(seen)) assert.equal(n, 1, `${p}: ${k} is set by ${n} rules and Pages would join them`);
+    assert.ok(seen['content-security-policy'], `${p} has no CSP`);
+  }
+  // Consume the emitted wildcard rules as the preview server does. A current version marker cannot make a
+  // separately cached, stable asset URL current; neither browser nor shared caches may reuse it while fresh.
+  for (const p of vendorPaths) {
+    const cache = headersFor(rules, p)['cache-control'];
+    assert.ok(cache, `${p}: stable asset has no explicit revalidation policy`);
+    const pairs = cache.toLowerCase().split(',').map(s => s.trim().split('='));
+    const directives = new Map(pairs);
+    assert.equal(directives.size, pairs.length, `${p}: duplicate cache directives are ambiguous`);
+    assert.equal(directives.get('max-age'), '0', `${p}: browser cache may serve old release bytes`);
+    assert.ok(directives.has('no-cache') && directives.get('no-cache') === undefined,
+      `${p}: revalidate the whole response even when a downstream cache raises max-age`);
+    assert.ok(directives.has('must-revalidate'), `${p}: stale responses need revalidation`);
+    assert.ok(!directives.has('s-maxage') || directives.get('s-maxage') === '0', `${p}: shared cache may serve old release bytes`);
+    assert.ok(!directives.has('immutable'), `${p}: a stable URL is not immutable`);
+  }
+  for (const p of ['/install.sh', '/install.ps1']) assert.ok(rules.some(r => r.pattern.test(p) && r.headers.some(([k, v]) => k === 'Content-Type' && v.startsWith('text/plain'))), `${p} is served as text, so curl and irm get the script and a browser shows it`);
+  const csp = text.match(/Content-Security-Policy: (.*)/)[1];
+  assert.doesNotMatch(csp, /'unsafe-inline'[^;]*;.*script-src|script-src[^;]*'unsafe-inline'/);
+  // The policy allows exactly the kit pages' inline scripts (copied byte for byte from the kit); site pages have none.
+  const { createHash } = await import('node:crypto');
+  const allowed = new Set(csp.match(/'sha256-[^']+'/g));
+  const kitHashes = new Set();
+  for (const f of html) for (const m of (await readFile(path.join(out, f), 'utf8')).matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
+    if (!m[1].trim()) continue;
+    assert.ok(f.startsWith('kit/'), `${f}: inline script on a site page`);
+    assert.equal((await readFile(path.join(out, f), 'utf8')), git('show', `HEAD:software/cadagent/webkit/${f.slice(4)}`), `${f} is not the kit's own file`);
+    kitHashes.add(`'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`);
+  }
+  assert.deepEqual([...allowed].sort(), [...kitHashes].sort());
+  assert.match(text, /Strict-Transport-Security: max-age=\d{8,}/);
+  assert.ok(files.includes('favicon.ico'), 'browsers probe /favicon.ico on text pages');
+  assert.ok(files.includes('kit/vendor/fonts/OFL-Inter.txt') && files.includes('kit/vendor/fonts/OFL-JetBrainsMono.txt'), 'font licences ship with the fonts');
+  assert.ok(existsSync(path.join(out, '404.html')));
+  for (const f of html) assert.doesNotMatch(await readFile(path.join(out, f), 'utf8'), /(?:href|src)="\s*(?:javascript|vbscript|data:text):/i, f);
+  assert.ok(files.includes('THIRD_PARTY_NOTICES.html'), 'licence notices are published');
+});
+
+test('code samples keep their links as written (no rewriting inside code)', async () => {
+  const viewer = await readFile(path.join(out, 'docs/file-viewer.html'), 'utf8');
+  assert.match(viewer, /<code[^>]*>[^<]*href="kit\/files\/file-viewer\.html\?file=/, 'the file-viewer snippet was rewritten');
+  for (const f of files.filter(f => f.endsWith('.html') && !f.startsWith('kit/')))
+    assert.ok(!(await readFile(path.join(out, f), 'utf8')).includes('&amp;amp;'), `${f}: an entity encoded twice`);
+});
+
+test('the snap-arm explorer is on its page with its still, and only that page loads its kit files', async () => {
+  const page = await readFile(path.join(out, 'docs/compliant.html'), 'utf8');
+  const demo = page.match(/<cad-cantilever\b[^>]*>([\s\S]*?)<\/cad-cantilever>/);
+  assert.ok(demo, 'no <cad-cantilever> on /docs/compliant');
+  assert.match(demo[1], /<img src="\/docs\/img\/compliant\/cantilever-explorer\.svg" alt="[^"]{40,}" width="640" height="250" ?\/?>/);
+  const head = page.slice(0, page.indexOf('</head>'));
+  assert.match(head, /<link rel="stylesheet" href="\/kit\/calculators\/cantilever\.css"><link rel="modulepreload" href="\/kit\/calculators\/cantilever\.js">/);
+  for (const f of ['kit/calculators/cantilever.js', 'kit/calculators/cantilever.css', 'kit/calculators/formulas.js', 'kit/calculators/formulas-data.js', 'docs/img/compliant/cantilever-explorer.svg'])
+    assert.ok(files.includes(f), `${f} is not published`);
+  assert.doesNotMatch(await readFile(path.join(out, 'docs/toolkit.html'), 'utf8'), /cantilever\.(css|js)/);
+});
+
+test('the four-bar animator is on its pages with its still, and only those pages load its kit files', async () => {
+  for (const name of ['linkages', 'formulas']) {
+    const page = await readFile(path.join(out, `docs/${name}.html`), 'utf8');
+    const demo = page.match(/<cad-fourbar crank="40" coupler="120" rocker="80" ground="100" branch="open" angle="40">([\s\S]*?)<\/cad-fourbar>/);
+    assert.ok(demo, `no <cad-fourbar> on /docs/${name}`);
+    assert.match(demo[1], /<img src="\/docs\/img\/formulas\/fourbar-animator\.svg" alt="[^"]{40,}" width="640" height="320" ?\/?>/);
+    const head = page.slice(0, page.indexOf('</head>'));
+    assert.match(head, /<link rel="stylesheet" href="\/kit\/calculators\/fourbar\.css"><link rel="modulepreload" href="\/kit\/calculators\/fourbar\.js">/);
+  }
+  for (const f of ['kit/calculators/fourbar.js', 'kit/calculators/fourbar.css', 'kit/calculators/formulas.js', 'docs/img/formulas/fourbar-animator.svg'])
+    assert.ok(files.includes(f), `${f} is not published`);
+  assert.doesNotMatch(await readFile(path.join(out, 'docs/compliant.html'), 'utf8'), /fourbar\.(css|js)/);
+});
+
+test('the fan-curve explorer is on its pages with its still, and only those pages load its kit files', async () => {
+  for (const name of ['fans', 'formulas']) {
+    const page = await readFile(path.join(out, `docs/${name}.html`), 'utf8');
+    const demo = page.match(/<cad-fan-curve fan="12" system="12" count="1" arrangement="parallel">([\s\S]*?)<\/cad-fan-curve>/);
+    assert.ok(demo, `no <cad-fan-curve> on /docs/${name}`);
+    assert.match(demo[1], /<img src="\/docs\/img\/thermal\/fan-curve-explorer\.svg" alt="[^"]{40,}" width="640" height="340" ?\/?>/);
+    const head = page.slice(0, page.indexOf('</head>'));
+    assert.match(head, /<link rel="stylesheet" href="\/kit\/calculators\/fan-curve\.css"><link rel="modulepreload" href="\/kit\/calculators\/fan-curve\.js">/);
+  }
+  for (const f of ['kit/calculators/fan-curve.js', 'kit/calculators/fan-curve.css', 'kit/calculators/formulas.js', 'kit/calculators/formulas-data.js', 'docs/img/thermal/fan-curve-explorer.svg'])
+    assert.ok(files.includes(f), `${f} is not published`);
+  for (const other of ['compliant', 'linkages'])
+    assert.doesNotMatch(await readFile(path.join(out, `docs/${other}.html`), 'utf8'), /fan-curve\.(css|js)/);
+});
+
+test('the torsion-snap and screw-boss explorers are on their pages with their stills, and only there load their kit files', async () => {
+  for (const [name, tag, attrs, still, height, file] of [
+    ['compliant', 'cad-torsion-snap', 'material="pla-bambu-basic" bars="2" length="15" width="4" thickness="1.2" twist="8" lever="10"',
+      'compliant/torsion-snap-explorer', 280, 'torsion-snap'],
+    ['screw-bosses', 'cad-printed-boss', 'material="pla-bambu-basic" size="30" outside="6" engagement="6" torque="0.3" axis="upright"',
+      'fasteners/screw-boss-explorer', 300, 'printed-boss']]) {
+    const page = await readFile(path.join(out, `docs/${name}.html`), 'utf8');
+    const demo = page.match(new RegExp(`<${tag} ${attrs}>([\\s\\S]*?)</${tag}>`));
+    assert.ok(demo, `no <${tag}> on /docs/${name}`);
+    assert.match(demo[1], new RegExp(`<img src="/docs/img/${still}\\.svg" alt="[^"]{40,}" width="640" height="${height}" ?/?>`));
+    const head = page.slice(0, page.indexOf('</head>'));
+    assert.ok(head.includes(`<link rel="stylesheet" href="/kit/calculators/${file}.css"><link rel="modulepreload" href="/kit/calculators/${file}.js">`), `${name}: ${file} kit files`);
+    for (const f of [`kit/calculators/${file}.js`, `kit/calculators/${file}.css`, `docs/img/${still}.svg`]) assert.ok(files.includes(f), `${f} is not published`);
+    for (const other of ['fans', 'linkages', name === 'compliant' ? 'screw-bosses' : 'compliant'])
+      assert.doesNotMatch(await readFile(path.join(out, `docs/${other}.html`), 'utf8'), new RegExp(`${file}\\.(css|js)`));
+  }
+});
+
+test('an image keeps the size its author gave, and its tag survives any alt text', async () => {
+  const wt = path.join(tmp, 'wt-img');
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', wt, 'HEAD'], { cwd: root });
+  try {
+    const fig = 'img/research/fdm-anisotropy.svg';
+    const [W, H] = (await readFile(path.join(root, 'docs', fig), 'utf8')).match(/width="(\d+)" height="(\d+)"/).slice(1).map(Number);
+    await plant(wt, 'docs/toolkit.md', `# Toolkit\n\n<img src="${fig}" alt="costs US$'s and $& and $$" width="300">\n\n` +
+      `<img src="${fig}" alt="half" width="50%">\n\n<img src="${fig}" alt="short" height="100">\n\nAfter the images.\n`);
+    const draft = path.join(tmp, 'draft-img');
+    execFileSync(process.execPath, ['tools/site/build-site.mjs', '--root', wt, '--worktree', '--out', draft], { cwd: root });
+    const page = await readFile(path.join(draft, 'docs/toolkit.html'), 'utf8');
+    const tag = alt => page.match(new RegExp(`<img\\b[^>]*alt="${alt}"[^>]*>`))?.[0] || '';
+    assert.match(tag("costs US\\$'s and \\$&amp;? and \\$\\$"), new RegExp(`width="300" height="${Math.round(300 * H / W)}"`), 'a pixel width stays; the height follows');
+    assert.equal((page.match(/After the images\./g) || []).length, 1, '"$\'" in an alt text must not copy the rest of the page');
+    assert.equal((page.match(/<\/html>/g) || []).length, 1);
+    assert.match(tag('half'), new RegExp(`width="${W}" height="${H}" style="width:50%"`), 'a percentage is honoured, with the proportions kept');
+    assert.match(tag('short'), new RegExp(`width="${Math.round(100 * W / H)}" height="100"`), 'a pixel height stays; the width follows');
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: root });
+  }
+});
+
+test('doc pages carry the page tree, with this page marked', async () => {
+  const toolkit = await readFile(path.join(out, 'docs/toolkit.html'), 'utf8');
+  const nav = toolkit.match(/<cad-nav [^>]*>([\s\S]*?)<\/cad-nav>/)?.[1];
+  assert.ok(nav, 'no <cad-nav> on a doc page');
+  assert.equal((nav.match(/aria-current="page"/g) || []).length, 1);
+  assert.match(nav, /<a href="\/docs\/toolkit" aria-current="page">/);
+  const catalog = JSON.parse(await readFile(path.join(out, 'catalog.json'), 'utf8'));
+  for (const doc of catalog.items.filter(i => i.markdown && i.status === 'ours' && ['doc', 'lesson', 'skill', 'agent', 'research'].includes(i.type)))
+    assert.ok(nav.includes(`href="${doc.url.replace('https://cad-agent.valpatel.com', '')}"`), `${doc.name} is missing from the page tree`);
+  assert.ok(files.includes('kit/documents/nav.js') && files.includes('kit/documents/nav.css'));
+  // Written out in full, so the first paint is final and it works without script: a landmark, the fold (a native
+  // <details>, closed: phones open it with or without nav.js), the filter, and this page's outline (every h2/h3 with an
+  // id) under it, again in the right-hand column.
+  assert.match(toolkit, /<cad-nav [^>]*role="navigation" aria-label="Explore topics and pages"/);
+  assert.match(toolkit, /<link rel="stylesheet" href="\/kit\/documents\/nav\.css">/);
+  assert.match(nav, /^<details class="cad-nav-fold"><summary class="cad-nav-toggle">Explore topics<\/summary><div class="cad-nav-panel">/);
+  assert.match(nav, /<\/div><\/details>$/, 'the fold holds the whole panel and nothing else');
+  assert.doesNotMatch(nav, /<button[^>]*class="cad-nav-toggle"/, 'tree toggle remains native');
+  assert.match(nav, /<form class="explore-nav-search" action="\/explore" role="search">/);
+  assert.match(nav, /<button type="submit">Search<\/button>/);
+  assert.match(nav, /<input type="search" class="cad-nav-filter" disabled/);
+  const article = toolkit.match(/<article class="prose">([\s\S]*?)<\/article>/)[1];
+  const heads = [...article.matchAll(/<h[23] id="([^"]+)">/g)].map(m => m[1]);
+  const listed = list => [...list.matchAll(/<a href="#([^"]+)">/g)].map(m => decodeURIComponent(m[1]));
+  const inTree = nav.match(/<div class="explore-mobile-outline">[\s\S]*?<ol class="cad-nav-outline"[^>]*>([\s\S]*?)<\/ol>/)?.[1];
+  assert.deepEqual(listed(inTree ?? ''), heads, 'the outline under the current page lists every h2/h3');
+  const rail = toolkit.match(/<nav class="doc-rail" aria-labelledby="rail-title">([\s\S]*?)<\/nav>/)?.[1];
+  assert.deepEqual(listed(rail ?? ''), heads, 'the right-hand outline lists every h2/h3');
+  // The provider exclusion is a comment; the skip link must still be the body's first actual element.
+  assert.match(toolkit, /<body[^>]*><!--email_off--><a class="skip-link" href="#main:content">Skip to content<\/a>/);
+  assert.match(toolkit, /<div class="doc-main" id="main:content" tabindex="-1">/);
+  // The rail is named once, by its visible title; the outline in the tree keeps its own name inside "Pages and contents".
+  assert.match(toolkit, /<nav class="doc-rail" aria-labelledby="rail-title"><p class="doc-rail-title" id="rail-title">On this page<\/p><ol class="cad-nav-outline cad-nav-rail">/);
+  assert.match(toolkit, /<div class="explore-mobile-outline"><p>On this page<\/p><ol class="cad-nav-outline" aria-label="On this page">/);
+});
+
+// Owner (2026-10-31): "make sure every page has some interesting diagrams, animations, renders etc, don't make them
+// boring." The pages that still have no picture, render, diagram or demo, exactly (the backlog in #122, now empty). A
+// new page without one fails; if one must ship without, list it here with the issue that adds its visual.
+const PAGES_WITHOUT_VISUALS = [];   // #124 gave every page one; keep it empty
+test('the pages without a picture, diagram or demo are exactly the known backlog', async () => {
+  const { without } = JSON.parse(await readFile(path.join(out, 'visuals.json'), 'utf8'));
+  const gained = PAGES_WITHOUT_VISUALS.filter(p => !without.includes(p)), lacking = without.filter(p => !PAGES_WITHOUT_VISUALS.includes(p));
+  assert.deepEqual(lacking, [], `add a diagram, render or demo to: ${lacking.join(', ')}`);
+  assert.deepEqual(gained, [], `these now have something to look at; remove them from PAGES_WITHOUT_VISUALS: ${gained.join(', ')}`);
+});
+
+test('docs/pages.yaml places real outputs on the site page only; the Markdown twin stays as written', async () => {
+  const spec = YAML.parse(git('show', 'HEAD:docs/pages.yaml'));
+  assert.ok(Object.keys(spec).length, 'docs/pages.yaml places something');
+  for (const [file, page] of Object.entries(spec)) {
+    const html = await readFile(path.join(out, publicPath(file).replace(/\.md$/, '.html')), 'utf8');
+    const twin = await readFile(path.join(out, publicPath(file)), 'utf8');
+    for (const v of [...(page.hero ? [page.hero] : []), ...(page.band || []), ...(page.figures || [])]) {
+      assert.ok(html.includes(`<img src="/${v.img}" width=`), `${file}: ${v.img} on the page, sized`);
+      // the caption, after what the picture is: a real output of its tool, or a diagram and the script that drew it
+      const caption = v.caption.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+      const what = v.shows === 'output' ? `<b class="shows-output">Real output</b> of <code>${v.tool}</code>, on `
+        : `<b class="shows-diagram">Diagram</b> of <code>${v.tool}</code>, drawn by <code>${v.drawn_by}</code>, on `;
+      assert.match(html, new RegExp(`${what.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}[^<]*(?:<a [^>]*>[^<]*</a>[^<]*)?\\.</span> ${caption.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}`), `${file}: ${v.img} says what it is, then its caption`);
+      assert.ok(!twin.includes(v.caption), `${file}: the twin does not gain the caption`);
+    }
+    assert.doesNotMatch(twin, /page-band|page-figure|section-cards/);
+  }
+});
+
+test('a catalogue demo opens at the section that shows it, not at a copy under the page title', async () => {
+  // Section cards and band tiles repeat a section's picture under the title; a demo that found its figure there
+  // opened the top of the page (#217 review: Connector window, on /docs/common-issues).
+  const ORIGIN = 'https://cad-agent.valpatel.com';
+  const catalog = JSON.parse(await readFile(path.join(out, 'catalog.json'), 'utf8'));
+  // A demo pinned with url: in docs/catalog.yaml links where it says; the others link where their figure is shown.
+  const pinned = new Set((YAML.parse(git('show', 'HEAD:docs/catalog.yaml')).demos || []).filter(d => d.url).map(d => d.title));
+  const demos = catalog.items.filter(i => i.type === 'demo' && !pinned.has(i.name) && i.url.startsWith(ORIGIN + '/') && i.url.includes('#'));
+  assert.ok(demos.length >= 3, 'demos found by their figure');
+  for (const d of demos) {
+    const [route, id] = d.url.slice(ORIGIN.length).split('#');
+    const page = (await readFile(path.join(out, resolve(route)), 'utf8'))
+      .replace(/<nav class="section-cards"[^>]*>[\s\S]*?<\/nav>|<ul class="band-tiles">[\s\S]*?<\/ul>/g, '');
+    const at = page.search(new RegExp(`<h[1-6] id="${id}"`));
+    assert.ok(at >= 0, `${d.name}: ${d.url} has no heading ${id}`);
+    const section = page.slice(at).split(/<h[1-6] id="/)[1];
+    assert.match(section, /<img\b|<cad-(?!copy|nav)[a-z]/, `${d.name}: the section at ${d.url} shows no picture or demo of its own`);
+  }
+  assert.match(catalog.items.find(i => i.name === 'Connector window').url, /\/docs\/common-issues#bought-parts-sources-and-assumptions$/);
+});
+
+test('permanent numbered-lesson redirects survive retirement of their source stubs', async () => {
+  const legacy = git('show', 'HEAD:tools/site/compiler/site-redirects.txt').split('\n').filter(l => /^lessons\/\d{2}-/.test(l)).map(l => l.split(/\s+/)[0]);
+  assert.equal(legacy.length, 12, 'the twelve original numbered lesson routes stay supported');
+  const redirects = new Map((await readFile(path.join(out, '_redirects'), 'utf8')).trim().split('\n').map(l => l.split(' ')).map(([f, ...r]) => [f, r]));
+  const catalog = await readFile(path.join(out, 'catalog.json'), 'utf8');
+  for (const old of legacy) {
+    const from = '/' + old.replace(/\.md$/, '');
+    assert.ok(!files.includes(old.replace(/\.md$/, '.html')) && !files.includes(old), `${old} is not published`);
+    assert.ok(!catalog.includes(from + '"'), `${old} is not catalogued`);
+    const [to, code] = redirects.get(from) || [];
+    assert.equal(code, '301', from);
+    assert.ok(resolve(to)?.endsWith('.html'), `${from} → ${to}, a page`);
+    assert.deepEqual(redirects.get('/' + old), [to + '.md', '301'], 'its Markdown twin moves too');
+    assert.ok(files.includes(to.slice(1) + '.md'));
+  }
+  // The preview server answers the way Pages does, keeping the query.
+  const server = spawn(process.execPath, ['tools/site/preview-site.mjs', '--dir', out, '--port', '0'], { cwd: root });
+  try {
+    const base = await new Promise((ok, fail) => {
+      server.stdout.on('data', d => { const m = String(d).match(/http:\/\/[\d.]+:\d+/); if (m) ok(m[0]); });
+      server.on('exit', c => fail(new Error(`preview server exited ${c}`)));
+    });
+    const res = await fetch(`${base}/lessons/03-mechanical-design-rules?x=1`, { redirect: 'manual' });
+    assert.equal(res.status, 301);
+    assert.equal(res.headers.get('location'), '/lessons/mechanical/design-rules?x=1');
+    assert.equal((await fetch(`${base}/lessons/mechanical/design-rules`)).status, 200);
+  } finally { server.kill(); }
+});
+
+test('a link to a folder opens its README page', async () => {
+  const index = await readFile(path.join(out, 'lessons/README.html'), 'utf8');
+  for (const area of ['process', 'mechanical', 'wiring', 'electronics', 'simulation', 'review']) {
+    assert.match(index, new RegExp(`href="/lessons/${area}/README"`), area);
+    assert.doesNotMatch(index, new RegExp(`href="https://github.com/[^"]*/tree/dev/lessons/${area}/?"`), area);
+  }
+  assert.match(await readFile(path.join(out, 'lessons/README.md'), 'utf8'), /\]\(process\/README\.md\)/, 'the Markdown twin too');
+});
+
+test('every lesson page has a diagram, and the home page links to knowledge without counter cards', async () => {
+  const lessons = files.filter(f => /^lessons\/.+\.html$/.test(f));
+  assert.ok(lessons.length >= 19, 'the index, six area READMEs and twelve lesson files');
+  for (const f of lessons) assert.match(await readFile(path.join(out, f), 'utf8'), /<figure class="cad-diagram"|class="language-mermaid"|<img\b/, `${f} has no diagram or picture`);
+  const rules = git('grep', '-h', '-e', '^### ', 'HEAD', '--', 'docs/lessons/*/*.md', ':!docs/lessons/*/README.md').split('\n').filter(Boolean).length;
+  assert.ok(rules > 50);
+  const home = await readFile(path.join(out, 'index.html'), 'utf8');
+  assert.doesNotMatch(home, /mission-num|Skills your agents|not built yet|fit-cmd/);
+  assert.match(home, /href="\/explore"/);
+  assert.match(home, /id="built-with"/);
+  assert.equal((home.match(/<cad-model /g) || []).length, 2);
+  assert.match(home, /src="\/docs\/img\/hero\/learning-loop\.svg"/);
+});
+
+test('a moved source stub uses public redirect identity and every invalid target or rule fails', async () => {
+  const wt = path.join(tmp, 'wt-redirects');
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', wt, 'HEAD'], { cwd: root });
+  const base = git('rev-parse', 'HEAD').trim();
+  const commit = msg => {
+    execFileSync('git', ['add', '--all'], { cwd: wt });
+    execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', msg], { cwd: wt });
+  };
+  const reset = () => execFileSync('git', ['checkout', '-q', base], { cwd: wt });
+  const buildWt = dir => execFileSync(process.execPath, ['tools/site/build-site.mjs', '--root', wt, '--client-diagrams', '--out', dir], { cwd: root, stdio: 'pipe' });
+  const stub = 'docs/lessons/03-mechanical-design-rules.md', from = 'lessons/03-mechanical-design-rules.md';
+  const list = path.join(wt, 'tools/site/compiler/site-redirects.txt');
+  const original = await readFile(list, 'utf8');
+  const plantStub = async target => writeFile(path.join(wt, stub), `<!-- moved-to: ${target} -->\n# Moved\n`);
+  try {
+    await plantStub('mechanical/design-rules.md');
+    commit('valid source stub under its new physical root');
+    const valid = path.join(tmp, 'valid-stub');
+    buildWt(valid);
+    assert.equal(await readFile(path.join(valid, '_redirects'), 'utf8'), await readFile(path.join(out, '_redirects'), 'utf8'));
+    reset();
+    for (const target of ['../../CLAUDE.md', '04-fasteners-and-assembly-access.md']) {
+      await writeFile(path.join(wt, 'docs/lessons/04-fasteners-and-assembly-access.md'), '<!-- moved-to: mechanical/fasteners-and-assembly-access.md -->\n# Moved\n');
+      await plantStub(target);
+      commit(`invalid stub target ${target}`);
+      assert.throws(() => buildWt(path.join(tmp, 'bad-target')), e => String(e.stderr).includes('not a published page'), target);
+      reset();
+    }
+    await plantStub('mechanical/design-rules.md');
+    await writeFile(list, original.replace(`${from} docs/lessons/mechanical/design-rules.md`, `${from} docs/lessons/README.md`));
+    commit('stub listed with the wrong target');
+    assert.throws(() => buildWt(path.join(tmp, 'wrong-target')), e => String(e.stderr).includes('change its line'));
+    reset();
+    await plantStub('mechanical/design-rules.md');
+    await writeFile(list, original.split('\n').filter(l => !l.startsWith(from)).join('\n'));
+    commit('unlisted source stub');
+    assert.throws(() => buildWt(path.join(tmp, 'unlisted')), e => String(e.stderr).includes('add "' + from));
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: root });
+  }
+});
+
+test('every local image has its width and height, so nothing jumps while it loads', async () => {
+  const bare = [];
+  for (const f of html.filter(f => !f.startsWith('kit/'))) {
+    for (const [tag] of (await readFile(path.join(out, f), 'utf8')).matchAll(/<img\b[^>]*\ssrc="\/[^"]*"[^>]*>/gi))
+      if (!/\swidth="\d+"/.test(tag) || !/\sheight="\d+"/.test(tag)) bare.push(`${f}: ${tag.slice(0, 100)}`);
+  }
+  assert.deepEqual(bare, []);
+});
+
+test('diagrams in files agents load leave the palette to the site', async () => {
+  const sources = selectPages(git('ls-tree', '-r', '-z', '--name-only', 'HEAD').split('\0').filter(Boolean))
+    .filter(p => ['skills', 'agents'].includes(p.section.id)).map(p => p.file);
+  assert.deepEqual(new Set(sources), new Set([
+    ...['cad-motion-validation', 'cad-pr-review', 'cad-remote-runs', 'cad-supply-chain', 'cad-work-tracking',
+      'design-process', 'mcmaster-parts', 'pem-fastener-selection', 'sheet-metal-hardware', 'repository-documentation',
+      'scada-component-authoring', 'scada-distribution-review', 'scada-model-adaptation', 'scada-system-authoring', 'scada-viewer-review']
+      .map(name => `.agents/skills/${name}/SKILL.md`),
+    '.agents/agents/cad-pr-reviewer.md', '.agents/agents/cad-resume.md',
+  ]), 'the exact canonical skills and roles must reach the palette consumer');
+  let drawn = 0;
+  for (const f of sources) {
+    const md = git('show', `HEAD:${f}`);
+    if (!/```mermaid/.test(md)) continue;
+    drawn++;
+    assert.doesNotMatch(md, /^\s*classDef (?:here|near|out)\b/m, `${f}: the site adds the palette; keep agent context short`);
+    const page = await readFile(path.join(out, publicPath(f).replace(/\.md$/, '.html')), 'utf8');
+    const used = [...md.matchAll(/^\s*class\s+\S+\s+(here|near|out)\s*$/gm)].map(m => m[1]);
+    for (const c of new Set(used)) assert.match(page, new RegExp(`classDef ${c} fill:#`), `${f}: ${c} is drawn in the palette`);
+    assert.doesNotMatch(await readFile(path.join(out, publicPath(f)), 'utf8'), /classDef/, `${f}: the Markdown twin stays as written`);
+  }
+  assert.ok(drawn >= 8, `${drawn} skill and subagent diagrams`);
+});
+
+test('the palette goes into real diagrams only: not into a quoted example, and :::here counts', async () => {
+  const wt = path.join(tmp, 'wt-palette');
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', wt, 'HEAD'], { cwd: root });
+  try {
+    await plant(wt, 'docs/toolkit.md', '# Toolkit\n\n' +
+      '```mermaid\nflowchart TD\n    A[a]:::here --> B[b]\n```\n\n' +
+      '````markdown\n```mermaid\nflowchart TD\n    Q[quoted]\n    class Q out\n```\n````\n');
+    const draft = path.join(tmp, 'draft-palette');
+    execFileSync(process.execPath, ['tools/site/build-site.mjs', '--root', wt, '--worktree', '--out', draft], { cwd: root });
+    const page = await readFile(path.join(draft, 'docs/toolkit.html'), 'utf8');
+    const diagram = page.match(/<pre class="cad-diagram-source">([\s\S]*?)<\/pre>|<code class="language-mermaid">([\s\S]*?)<\/code>/)?.slice(1).join('') || '';
+    assert.match(diagram, /classDef here fill:#fffdf5/, ':::here shorthand gets the palette');
+    assert.doesNotMatch(diagram, /classDef (?:near|out)/, 'only the classes the diagram uses');
+    const quoted = page.match(/<code class="language-markdown">([\s\S]*?)<\/code>/)?.[1] || '';
+    assert.match(quoted, /class Q out/);
+    assert.doesNotMatch(quoted, /classDef/, 'a Mermaid example inside another fence stays as written');
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: root });
+  }
+});
+
+// Diagrams are drawn by the build (#132, tools/site/compiler/site-diagrams.mjs): each Mermaid block arrives as a finished figure, so
+// nothing moves while the page loads and it shows without script. Its source stays in the figure and in the twin.
+test('every diagram arrives drawn, with its source, and the Markdown twins keep their fences', async () => {
+  assert.match(buildLog, /Diagrams: \d+ \(Mermaid 11\.\d+\.\d+\)/);
+  assert.doesNotMatch(buildLog, /left to the reader's browser/, 'the build drew no diagrams: install a browser (npm --prefix tools/site exec --no -- playwright install chromium)');
+  let figures = 0;
+  for (const f of html.filter(f => !f.startsWith('kit/'))) {
+    const page = await readFile(path.join(out, f), 'utf8');
+    assert.doesNotMatch(page, /class="language-mermaid"|<pre class="mermaid"/, `${f}: a Mermaid block was left for the reader's browser`);
+    const figs = [...page.matchAll(/<figure class="cad-diagram"[\s\S]*?<\/figure>/g)].map(m => m[0]);
+    // Each block arrives drawn twice, light then dark (#305), with the same source; the page's CSS shows one.
+    assert.equal(figs.length % 2, 0, `${f}: a diagram without its twin`);
+    for (let i = 0; i < figs.length; i += 2) {
+      const source = fig => fig.match(/<pre class="cad-diagram-source">([^<]+)<\/pre>/)?.[1];
+      assert.equal(source(figs[i]), source(figs[i + 1]), `${f}: a diagram's light and dark drawings show different sources`);
+    }
+    for (const [i, fig] of figs.entries()) {
+      const theme = i % 2 ? 'dark' : 'light';
+      assert.match(fig, new RegExp(`^<figure class="cad-diagram" data-theme-only="${theme}" data-theme="${theme}" aria-label="Engineering diagram" data-state="ready" aria-busy="false" style="--cad-diagram-w: [\\d.]+px;">`), f);
+      assert.match(fig, /<div class="cad-diagram-view"[^>]*><svg id="cad-diagram-s[0-9a-f]{12}(?:-\d+)?" /, f);
+      assert.match(fig, /<details><summary>Diagram source<\/summary><pre class="cad-diagram-source">[^<]+<\/pre><\/details><\/figure>$/, f);
+      // Real tags only (the source is text): no script, handler or javascript: link in what Mermaid drew.
+      const tags = [...fig.replace(/<pre class="cad-diagram-source">[^<]*<\/pre>/, '').matchAll(/<([a-z][\w:-]*)\b([^>]*)>/gi)];
+      assert.deepEqual(tags.filter(([, t, a]) => /^script$/i.test(t) || /\son[a-z]+\s*=/i.test(a) || /javascript:/i.test(a)).map(m => m[0]), [], f);
+    }
+    const ids = [...page.matchAll(/<svg id="([^"]+)"/g)].map(m => m[1]);
+    assert.equal(new Set(ids).size, ids.length, `${f}: two diagrams share an SVG id`);
+    figures += figs.length;
+  }
+  assert.ok(figures >= 120, `${figures} drawings`);
+  assert.match(await readFile(path.join(out, 'docs/style-guide.md'), 'utf8'), /^```mermaid$/m, 'the twin keeps the Mermaid source for agents');
+});
+
+test('two builds with empty diagram caches draw every page byte for byte the same', async () => {
+  const pages = async dir => new Map(await Promise.all((await readdir(dir, { recursive: true, withFileTypes: true }))
+    .filter(e => e.isFile() && e.name.endsWith('.html')).map(async e => [path.relative(dir, path.join(e.parentPath, e.name)), await readFile(path.join(e.parentPath, e.name))])));
+  const [a, b] = ['det-a', 'det-b'].map(n => path.join(tmp, n));
+  // Two builds at once, each in its own browser with its own empty cache: as independent as one after the other.
+  for (const { stdout } of await Promise.all([a, b].map(d => execFileAsync(process.execPath, ['tools/site/build-site.mjs', '--out', d],
+    { cwd: root, env: { ...process.env, CAD_AGENT_DIAGRAM_CACHE: `${d}-cache` }, maxBuffer: 64 << 20 }))))
+    assert.match(stdout, /0 from the cache, \d+ drawn in /, stdout);
+  const [pa, pb] = [await pages(a), await pages(b)];
+  assert.deepEqual([...pa.keys()].sort(), [...pb.keys()].sort());
+  const differ = [...pa].filter(([f, buf]) => !buf.equals(pb.get(f))).map(([f]) => f);
+  assert.deepEqual(differ, []);
+  assert.ok([...pa.values()].some(buf => buf.includes('<figure class="cad-diagram"')));
+});
+
+test('with --client-diagrams (as on a machine with no browser) the blocks stay for the reader\'s browser, and the build passes', async () => {
+  const draft = path.join(tmp, 'client-diagrams');
+  const log = execFileSync(process.execPath, ['tools/site/build-site.mjs', '--client-diagrams', '--out', draft], { cwd: root }).toString();
+  assert.match(log, /left to the reader's browser/);
+  const page = await readFile(path.join(draft, 'docs/style-guide.html'), 'utf8');
+  assert.equal((page.match(/<pre><code class="language-mermaid">/g) || []).length, 3);
+  assert.doesNotMatch(page, /<figure class="cad-diagram"/);
+  assert.match(page, /<script type="module" src="\/web\/site\.js"><\/script>/, 'site.js still starts kit/documents/diagrams.js');
+});
+
+test('no page refers to a lesson by its old number', () => {
+  // The numbered lessons moved into area folders (#133): "see 04" or "lesson 07" now leads nowhere. Link the page.
+  let hits = '';
+  try {
+    hits = git('grep', '-n', '-E', '-e', String.raw`\b[Ll]essons? (0[1-9]|1[0-2])\b|\b[Ss]ee (0[1-9]|1[0-2])\b`, 'HEAD', '--',
+      '*.md', '*.json', ':!CHANGELOG.md');
+  } catch (e) { if (e.status !== 1) throw e; }                // git grep exits 1 when nothing matches
+  hits = hits.split('\n').filter(Boolean);
+  assert.deepEqual(hits, []);
+});
+
+test('every page names its cad-agent.valpatel.com address as canonical, and the 404 page names none', async () => {
+  // The same build is served on two custom domains (cad-agent.valpatel.com and cad-agent.gyropup.com).
+  const origin = 'https://cad-agent.valpatel.com';
+  const rules = parseHeaders(await readFile(path.join(out, '_headers'), 'utf8'));
+  const checked = [];
+  for (const f of html) {
+    const text = await readFile(path.join(out, f), 'utf8');
+    const served = '/' + f.replace(/\/index\.html$/, '/').replace(/\.html$/, '');
+    if (f.startsWith('kit/')) {  // copied byte for byte from the kit: the canonical comes as a Link header
+      assert.doesNotMatch(text, /rel="canonical"/, `${f} must stay as the kit ships it`);
+      const links = rules.filter(r => r.pattern.test(served)).flatMap(r => r.headers).filter(([k]) => k.toLowerCase() === 'link');
+      assert.deepEqual(links.map(([, v]) => v), [`<${origin}${served}>; rel="canonical"`], served);
+      checked.push(f);
+      continue;
+    }
+    assert.ok(text.includes('<header class="site-header">'), `${f}: a published page built without the site's frame, so it has no canonical`);
+    const canon = [...text.matchAll(/<link rel="canonical" href="([^"]+)">/g)].map(m => m[1]);
+    if (f === '404.html') { assert.deepEqual(canon, [], '404.html must not name a canonical page'); continue; }
+    assert.equal(canon.length, 1, `${f}: ${canon.length} canonical links`);
+    const want = origin + (f === 'index.html' ? '/' : '/' + f.replace(/\.html$/, ''));
+    assert.equal(canon[0], want, f);
+    assert.ok(resolve(canon[0].slice(origin.length)), `${f}: its canonical ${canon[0]} is not a published page`);
+    checked.push(f);
+  }
+  assert.ok(checked.includes('index.html') && checked.includes('catalog.html') && checked.includes('kit/model/viewer.html') && checked.length > 40,
+    `checked ${checked.length} pages`);
+});
+
+test('the moved contributor source keeps its public URLs, identity and real provenance', async () => {
+  const catalog = JSON.parse(await readFile(path.join(out, 'catalog.json'), 'utf8'));
+  const policy = catalog.items.find(i => i.id === 'guide-contributing');
+  assert.equal(policy.url, 'https://cad-agent.valpatel.com/CONTRIBUTING');
+  assert.equal(policy.markdown, 'https://cad-agent.valpatel.com/CONTRIBUTING.md');
+  assert.equal(policy.source, 'https://github.com/Valpatel/cad-agent/blob/dev/.github/CONTRIBUTING.md');
+  const html = await readFile(path.join(out, 'CONTRIBUTING.html'), 'utf8');
+  assert.match(html, /href="https:\/\/github\.com\/Valpatel\/cad-agent\/blob\/dev\/\.github\/CONTRIBUTING\.md"/);
+  assert.match(html, /href="\/docs\/agent-workflow/);
+  assert.ok((await ids('CONTRIBUTING.html')).has('gates'), 'inbound fragments keep their existing target');
+  assert.match(await readFile(path.join(out, 'README.html'), 'utf8'), /href="\/CONTRIBUTING"/);
+  const twin = await readFile(path.join(out, 'CONTRIBUTING.md'), 'utf8');
+  assert.match(twin, /\]\(docs\/agent-workflow\.md/);
+  assert.doesNotMatch(twin, /\]\(\.\.\/docs\/agent-workflow\.md/, 'links resolve from the source but emit relative to the public twin');
+  assert.ok(!files.includes('.github/CONTRIBUTING.html') && !files.includes('.github/SECURITY.html'));
+  for (const file of ['llms.txt', 'sitemap.xml']) {
+    const body = await readFile(path.join(out, file), 'utf8');
+    assert.match(body, /https:\/\/cad-agent\.valpatel\.com\/CONTRIBUTING/);
+    assert.doesNotMatch(body, /https:\/\/cad-agent\.valpatel\.com\/\.github\/CONTRIBUTING/);
+  }
+});
+
+test('the moved notices keep public URLs, catalogue identity, links and real provenance', async () => {
+  const catalog = JSON.parse(await readFile(path.join(out, 'catalog.json'), 'utf8'));
+  const notice = catalog.items.find(i => i.id === 'guide-third-party-notices');
+  assert.equal(notice.url, 'https://cad-agent.valpatel.com/THIRD_PARTY_NOTICES');
+  assert.equal(notice.markdown, 'https://cad-agent.valpatel.com/THIRD_PARTY_NOTICES.md');
+  assert.equal(notice.source, 'https://github.com/Valpatel/cad-agent/blob/dev/software/vendor/THIRD_PARTY_NOTICES.md');
+  const html = await readFile(path.join(out, 'THIRD_PARTY_NOTICES.html'), 'utf8');
+  assert.match(html, /href="https:\/\/github\.com\/Valpatel\/cad-agent\/blob\/dev\/software\/vendor\/THIRD_PARTY_NOTICES\.md"/);
+  assert.match(html, /href="\/research\/landscape"/);
+  assert.ok((await ids('THIRD_PARTY_NOTICES.html')).has('third-party-notices'));
+  assert.match(await readFile(path.join(out, 'README.html'), 'utf8'), /href="\/THIRD_PARTY_NOTICES"/);
+  const twin = await readFile(path.join(out, 'THIRD_PARTY_NOTICES.md'), 'utf8');
+  assert.match(twin, /\]\(research\/landscape\.md\)/);
+  assert.doesNotMatch(twin, /\]\(\.\.\/research\/landscape\.md\)/);
+  assert.ok(!files.includes('software/vendor/THIRD_PARTY_NOTICES.html'));
+  for (const file of ['llms.txt', 'sitemap.xml']) {
+    const body = await readFile(path.join(out, file), 'utf8');
+    assert.match(body, /https:\/\/cad-agent\.valpatel\.com\/THIRD_PARTY_NOTICES/);
+    assert.doesNotMatch(body, /https:\/\/cad-agent\.valpatel\.com\/vendor\/THIRD_PARTY_NOTICES/);
+  }
+});
+
+test('a real draft consumes moved sources and cannot substitute stale root files when they are missing', async () => {
+  const wt = path.join(tmp, 'wt-policy');
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', wt, 'HEAD'], { cwd: root });
+  try {
+    await writeFile(path.join(wt, '.github/CONTRIBUTING.md'), '# Current policy\n\nMOVED_SOURCE_SENTINEL.\n\n[Commands](../docs/toolkit.md#commands)\n');
+    await writeFile(path.join(wt, 'CONTRIBUTING.md'), '# Stale root policy\n\nSTALE_ROOT_SENTINEL.\n');
+    await writeFile(path.join(wt, 'software/vendor/THIRD_PARTY_NOTICES.md'), '# Third-party notices\n\nMOVED_NOTICE_SENTINEL.\n\n[Commands](../../docs/toolkit.md#commands)\n');
+    await writeFile(path.join(wt, 'THIRD_PARTY_NOTICES.md'), '# Stale root notices\n\nSTALE_NOTICE_SENTINEL.\n');
+    const registry = path.join(wt, 'software/vendor/upstreams/registry.yaml');
+    const upstreams = YAML.parse(await readFile(registry, 'utf8'));
+    upstreams[0].what = 'REGISTRY_SOURCE_SENTINEL';
+    await writeFile(registry, YAML.stringify(upstreams));
+    await mkdir(path.join(wt, 'upstreams'), { recursive: true });
+    await writeFile(path.join(wt, 'upstreams', 'registry.yaml'), '[]\n');
+    const guide = 'docs/practice/weekly-upstream-update.md';
+    await plant(wt, guide, '# Weekly upstream update\n\nMOVED_GUIDE_SENTINEL.\n\n[Commands](../toolkit.md#commands)\n');
+    await writeFile(path.join(wt, 'docs/weekly-upstream-update.md'), '# Stale guide\n\nSTALE_GUIDE_SENTINEL.\n');
+    const landscapeSource = 'docs/research/landscape.json';
+    const landscape = JSON.parse(await readFile(path.join(wt, landscapeSource), 'utf8'));
+    landscape.libraries[0].what = 'RESEARCH_SOURCE_SENTINEL';
+    await writeFile(path.join(wt, landscapeSource), JSON.stringify(landscape));
+    await mkdir(path.join(wt, 'research'), { recursive: true });
+    await writeFile(path.join(wt, 'research/landscape.json'), '{"projects":[],"libraries":[],"benchmarks":[]}\n');
+    const draft = path.join(tmp, 'draft-policy');
+    const run = () => execFileSync(process.execPath, ['tools/site/build-site.mjs', '--root', wt, '--worktree', '--client-diagrams', '--out', draft], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    run();
+    const page = await readFile(path.join(draft, 'CONTRIBUTING.html'), 'utf8');
+    assert.match(page, /MOVED_SOURCE_SENTINEL/);
+    assert.doesNotMatch(page, /STALE_ROOT_SENTINEL/);
+    assert.match(page, /href="\/docs\/toolkit#commands"/);
+    assert.match(await readFile(path.join(draft, 'CONTRIBUTING.md'), 'utf8'), /\]\(docs\/toolkit\.md#commands\)/);
+    const notice = await readFile(path.join(draft, 'THIRD_PARTY_NOTICES.html'), 'utf8');
+    assert.match(notice, /MOVED_NOTICE_SENTINEL/);
+    assert.doesNotMatch(notice, /STALE_NOTICE_SENTINEL/);
+    assert.match(notice, /href="\/docs\/toolkit#commands"/);
+    assert.match(await readFile(path.join(draft, 'THIRD_PARTY_NOTICES.md'), 'utf8'), /\]\(docs\/toolkit\.md#commands\)/);
+    const catalog = JSON.parse(await readFile(path.join(draft, 'catalog.json'), 'utf8'));
+    assert.equal(catalog.items.find(i => i.name === upstreams[0].name).what, 'REGISTRY_SOURCE_SENTINEL');
+    assert.equal(catalog.items.find(i => i.kind === 'library' && i.name === landscape.libraries[0].name).what, 'RESEARCH_SOURCE_SENTINEL');
+    const movedGuide = await readFile(path.join(draft, 'docs/weekly-upstream-update.html'), 'utf8');
+    assert.match(movedGuide, /MOVED_GUIDE_SENTINEL/);
+    assert.doesNotMatch(movedGuide, /STALE_GUIDE_SENTINEL/);
+    assert.match(movedGuide, /href="\/docs\/toolkit#commands"/);
+    assert.match(await readFile(path.join(draft, 'docs/weekly-upstream-update.md'), 'utf8'), /\]\(toolkit\.md#commands\)/);
+    for (const source of ['.github/CONTRIBUTING.md', 'software/vendor/THIRD_PARTY_NOTICES.md', 'software/vendor/upstreams/registry.yaml', guide, landscapeSource]) {
+      const current = await readFile(path.join(wt, source));
+      await rm(path.join(wt, source));
+      assert.throws(run, error => String(error.stderr).includes('ENOENT') && String(error.stderr).includes(source),
+        `${source}: missing real source must fail even while the stale root file still exists`);
+      await writeFile(path.join(wt, source), current);
+    }
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: root });
+  }
+});
+
+
+test('folder illustrations beside their source are published as real local images', async () => {
+  const image = 'docs/examples/explore-two-wheel/compare.png';
+  const route = 'repo/folders/d-docs/d-examples/d-explore-two-wheel/README';
+  const page = await readFile(path.join(out, route + '.html'), 'utf8');
+  assert.ok(page.includes(`src="/${image}"`), 'keep the example illustration in the actual rendered folder page');
+  assert.ok((await readFile(path.join(out, image))).equals(execFileSync('git', ['show', `HEAD:${image}`], { cwd: root })),
+    'the real example image must be copied from the same commit as the page');
+  const twin = await readFile(path.join(out, route + '.md'), 'utf8');
+  assert.ok(twin.includes(path.posix.relative(path.posix.dirname(route), image)), 'the twin must resolve to that local image too');
+});
+
+test('repository map publishes folder details without flooding the catalogue', async () => {
+  const html = await readFile(path.join(out, 'docs/map.html'), 'utf8');
+  const twin = await readFile(path.join(out, 'docs/map.md'), 'utf8');
+  assert.match(html, /Repository map/);
+  assert.match(twin, /Canonical source owner/);
+  assert.match(twin, /Published owner/);
+  assert.match(twin, /Published folder map/);
+  assert.match(twin, /https:\/\/github\.com\/Valpatel\/cad-agent\/blob\/dev\/tools\/README\.md/);
+  assert.match(html, /href="\/docs\/README"[^>]*>Published owner<\/a>/);
+  assert.match(html, /class="cad-diagram"/);
+  const catalog = JSON.parse(await readFile(path.join(out, 'catalog.json'), 'utf8'));
+  assert.ok(catalog.items.some(i => i.markdown === 'https://cad-agent.valpatel.com/docs/map.md'));
+  assert.ok(!catalog.items.some(i => i.source?.endsWith('/tools/README.md')));
+  assert.ok(!catalog.items.some(i => i.source?.endsWith('/.agents/README.md')));
+  // Source selection is only intent. Bind EVERY generated public anchor to real HTML/twin/catalogue output.
+  const checkPublishedOwners = rendered => {
+    const destinations = [...new Set([...rendered.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>Published owner<\/a>/g)].map(m => m[1]))];
+    assert.ok(destinations.length > 10);
+    for (const href of destinations) {
+      assert.ok(href.startsWith('/'), `public owner misrouted to source tree: ${href}`);
+      assert.ok(existsSync(path.join(out, href.slice(1) + '.html')), `no actual HTML for ${href}`);
+      assert.ok(existsSync(path.join(out, href.slice(1) + '.md')), `no actual Markdown twin for ${href}`);
+      assert.ok(catalog.items.some(i => i.markdown === 'https://cad-agent.valpatel.com' + href + '.md'), `no actual catalogue identity for ${href}`);
+    }
+  };
+  checkPublishedOwners(html);
+  const oldMisroute = html.replace(/(<a\b[^>]*href=")[^"]+("[^>]*>Published owner<\/a>)/,
+    '$1https://github.com/Valpatel/cad-agent/tree/dev/README$2');
+  assert.notEqual(oldMisroute, html);
+  assert.throws(() => checkPublishedOwners(oldMisroute), /public owner misrouted to source tree/);
+  const tracked = git('ls-tree', '-r', '-z', '--name-only', 'HEAD').split('\0').filter(Boolean);
+  const publication = createPublication(JSON.parse(git('show', 'HEAD:tools/site/page-sources.json')));
+  const maps = folderMapSources(tracked, JSON.parse(git('show', 'HEAD:tools/site/compiler/repo-map.json')), publication);
+  const expected = new Set(maps.map(p => 'https://cad-agent.valpatel.com/' + p.public.replace(/\.md$/, '')));
+  const actual = new Set([...html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>Published folder map<\/a>/g)].map(m => m[1]));
+  assert.deepEqual(actual, expected, 'every source-derived owned map needs its actual detail route');
+  const folderPaths = new Map(maps.map(p => [p.file, p.public]));
+  const sources = new Set(tracked), sourceBytes = new Map();
+  const readSource = file => {
+    if(!sourceBytes.has(file))sourceBytes.set(file,execFileSync('git',['show',`HEAD:${file}`],{cwd:root}));
+    return sourceBytes.get(file);
+  };
+  const assertOwnedSVGs = (page, figures, file) => {
+    const images=new Set([...page.matchAll(/<img\b[^>]*\bsrc="([^"#?]+)(?:[?#][^"]*)?"/g)].map(m=>m[1]));
+    for(const source of figures)assert.ok(images.has('/'+source),`${file}: must show owned SVG ${source}`);
+  };
+  let mermaidMaps=0, svgMaps=0, negativeSVGChecked=false;
+  for (const p of maps) {
+    const dest = p.public.replace(/\.md$/, '.html');
+    assert.ok(files.includes(dest) && files.includes(p.public), `${p.file}: both HTML and Markdown must exist`);
+    const page = await readFile(path.join(out, dest), 'utf8');
+    assert.match(page, /href="\/docs\/map">Repository map<\/a>/);
+    const parent = '/' + (folderPaths.get(p.parent) || publication.publicPath(p.parent)).replace(/\.md$/, '');
+    assert.ok(page.includes(`href="${parent}">Parent folder</a>`), `${p.file}: current parent route`);
+    const source=mapMarkdown(readSource(p.file).toString('utf8'));
+    const ownedSVGs=[...new Set(source.figures.filter(href=>!/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(href)).map(href=>{
+      const file=decodeURIComponent(href.split(/[?#]/)[0]);
+      return file.startsWith('/') ? file.slice(1) : path.posix.normalize(path.posix.join(path.posix.dirname(p.file),file));
+    }).filter(file=>file.endsWith('.svg')))];
+    assert.ok(source.diagrams.length || ownedSVGs.length,`${p.file}: source must declare a diagram or owned SVG`);
+    if(source.diagrams.length) {
+      mermaidMaps++;
+      assert.match(page, /<figure class="cad-diagram" data-theme-only="light"/,p.file);
+      assert.match(page, /<figure class="cad-diagram" data-theme-only="dark"/,p.file);
+    }
+    if(ownedSVGs.length) {
+      svgMaps++;assertOwnedSVGs(page,ownedSVGs,p.file);
+      for(const svg of ownedSVGs) {
+        assert.ok(sources.has(svg),`${p.file}: SVG must be committed: ${svg}`);
+        assert.match(readSource(svg).toString('utf8'),/<svg\b/,svg);
+        assert.ok((await readFile(path.join(out,svg))).equals(readSource(svg)),`${svg}: published SVG matches its owned source`);
+      }
+      if(!negativeSVGChecked) {
+        assert.throws(()=>assertOwnedSVGs(page.replace(/<img\b[^>]*>/g,''),ownedSVGs,p.file),/must show owned SVG/);
+        assert.throws(()=>assertOwnedSVGs(page.replaceAll('/'+ownedSVGs[0],'/unrelated.svg'),ownedSVGs,p.file),/must show owned SVG/);
+        negativeSVGChecked=true;
+      }
+    }
+    assert.ok(!catalog.items.some(i => i.source?.endsWith('/' + p.file)), `${p.file}: folder map became a catalogue item`);
+  }
+  assert.ok(mermaidMaps>0 && svgMaps>0 && negativeSVGChecked,'both actual map formats and missing/misrouted SVG controls are exercised');
+  const version = JSON.parse(await readFile(path.join(out, 'version.json'), 'utf8'));
+  assert.equal(version.folder_maps, maps.length);
+  assert.equal(version.pages, publication.selectPages(tracked).length);
+  const llms = await readFile(path.join(out, 'llms-full.txt'), 'utf8');
+  assert.ok(!llms.includes('Source: https://cad-agent.valpatel.com/repo/folders/'), 'maps belong in deep browsing, not every agent prompt');
+  const start = html.indexOf('<h2 id="full-inventory"');
+  const end = html.indexOf('Generated by', start);
+  assert.ok(start >= 0 && end > start, 'measure the generated inventory, not the ordinary open page navigation');
+  const inventory = html.slice(start, end);
+  assert.match(inventory, /<details>/);
+  assert.doesNotMatch(inventory, /<details\b[^>]*\bopen(?:[ >])/);
+
+});
