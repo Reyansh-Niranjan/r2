@@ -142,22 +142,31 @@ try {
     $isLocalSource = $false
     if ($scriptDir -and (Test-Path (Join-Path $scriptDir "commands")) -and (Test-Path (Join-Path $scriptDir "engine"))) {
         $isLocalSource = $true
-    } elseif (Test-Path "D:\R2\commands" -and (Test-Path "D:\R2\engine")) {
+    } elseif ($Local -and (Test-Path "D:\R2\commands") -and (Test-Path "D:\R2\engine")) {
         $scriptDir = "D:\R2"
         $isLocalSource = $true
     }
 
-    if ($Local -or ($isLocalSource -and ($Local -or $SkipAuthCheck -or (-not $Force)))) {
+    if ($Local -or ($isLocalSource -and (-not $Force))) {
+        if (-not $scriptDir -and ((Test-Path "D:\R2\commands") -and (Test-Path "D:\R2\engine"))) {
+            $scriptDir = "D:\R2"
+        }
         Write-Host "  Using local canonical R2 source files from: $scriptDir"
         $sourceDir = $scriptDir
     } else {
         Write-Host "  Cloning $REPO (shallow)..."
         gh repo clone $REPO $tempDir -- --depth 1 --quiet
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to clone repository $REPO. Aborting."
-            exit 1
+            if ((Test-Path "D:\R2\commands") -and (Test-Path "D:\R2\engine")) {
+                Write-Host "  [WARN] GitHub clone failed; falling back to local canonical R2 source at D:\R2" -ForegroundColor Yellow
+                $sourceDir = "D:\R2"
+            } else {
+                Write-Error "Failed to clone repository $REPO. Aborting."
+                exit 1
+            }
+        } else {
+            $sourceDir = $tempDir
         }
-        $sourceDir = $tempDir
     }
 
     # Discover valid specialists from source

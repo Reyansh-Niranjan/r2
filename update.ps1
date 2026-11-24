@@ -36,7 +36,7 @@ $localVersion = $localConfig.version
 $localRepo = $null
 if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "VERSION")) -and (Test-Path (Join-Path $PSScriptRoot "commands"))) {
     $localRepo = $PSScriptRoot
-} elseif (Test-Path "D:\R2\VERSION") {
+} elseif ((Test-Path "D:\R2\VERSION")) {
     $localRepo = "D:\R2"
 }
 
