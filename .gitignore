@@ -15,3 +15,8 @@ engine/rules/ecc/
 test-project/
 scratch/
 temp/
+
+# Prohibit markdown task tracking files (use Antigravity's native TODO tool)
+TASKS.md
+tasks.md
+

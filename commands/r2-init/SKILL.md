@@ -8,7 +8,14 @@ description: "R2 Workspace Initialization & Onboarding Orchestrator. Audits envi
 Orchestrates complete environment setup and skill onboarding for the R2 Skill Orchestration System.
 
 > [!IMPORTANT]
-> **Prompt Injection Policy:** `/r2:init` does **NOT** load `claude-fable-5.2.md` or `claude-opus-5.5.md`. Reference files are part of R2 directly and are installed and synchronized by `install.ps1` and `update.ps1`. `/r2:init` is strictly focused on workspace onboarding, technology detection, and `.r2/` project state only.
+> **Prompt Injection Policy & Mandatory Pagination Rule:**
+> - `/r2:init` does **NOT** load `claude-fable-5.2.md` or `claude-opus-5.5.md`. Reference files are part of R2 directly and are installed and synchronized by `install.ps1` and `update.ps1`. `/r2:init` is strictly focused on workspace onboarding, technology detection, and `.r2/` project state only.
+> - **Mandatory Pagination Rule:** If any `view_file` call stops at line 800, you MUST immediately call `view_file` with `StartLine: 801` before proceeding.
+
+### 📋 Native Task Tracking (No Markdown Checkpoint Files)
+- Use Antigravity's native **TODO / Task List tool (`update_steps`)** directly in the conversation UI for multi-step tracking.
+- Keep task items short (2-6 words), action-oriented, and updated live as each step starts (`in_progress`) and finishes (`done`).
+- **PROHIBITION:** NEVER create, read, or update `TASKS.md`, `tasks.md`, or any markdown checkpoint files on disk. All task tracking lives strictly in the conversation UI via the native tool.
 
 ---
 

@@ -112,6 +112,12 @@ if (-not (Test-Path $gitignoreFile)) {
     } else {
         Write-Host "  [OK] '$ignorePattern' is already present in .gitignore." -ForegroundColor Green
     }
+
+    # Ensure TASKS.md is in .gitignore to prevent accidental task file check-ins
+    if ($ignoreContent -notmatch "(?m)^\s*TASKS\.md\s*$") {
+        Add-Content -Path $gitignoreFile -Value "`nTASKS.md`ntasks.md" -Encoding UTF8
+        Write-Host "  Added 'TASKS.md' to .gitignore." -ForegroundColor Green
+    }
 }
 
 # Ensure .r2 state directory exists (Git-tracked!)
@@ -282,7 +288,7 @@ try {
         "repository" = $REPO
         "installed_at" = if ($existingConfig.ContainsKey("installed_at")) { $existingConfig["installed_at"] } else { $now }
         "updated_at" = $now
-        "commands" = @("r2", "r2-init", "r2-code", "r2-debug", "r2-web", "r2-motion", "r2-3d")
+        "commands" = @("r2", "r2-init", "r2-code", "r2-debug", "r2-bug", "r2-plan", "r2-web", "r2-motion", "r2-3d")
         "specialists_mode" = if ($AllSpecialists) { "all" } else { "on_demand" }
         "status" = "ready"
     }
@@ -306,6 +312,8 @@ Write-Host "  - /r2         : Central ecosystem overview & routing table"
 Write-Host "  - /r2:init    : Project inspection, onboarding & ECC rules setup"
 Write-Host "  - /r2:code    : Full-stack engineering & Karpathy constraints"
 Write-Host "  - /r2:debug   : Precision triage & causal graph tracing"
+Write-Host "  - /r2:bug     : Systematic bug diagnosis & causal triage"
+Write-Host "  - /r2:plan    : Socratic requirements lock & milestone blueprints"
 Write-Host "  - /r2:web     : Anti-slop creative web frontend design"
 Write-Host "  - /r2:motion  : 120fps GPU animations & spring physics"
 Write-Host "  - /r2:3d      : Parametric CadQuery solid modeling & 3D printing DfM"

@@ -32,7 +32,7 @@ Once installed, switch to Google Antigravity or Gemini chat and run:
 
 ## 🏛️ Architecture Overview
 
-R2 separates responsibilities into **7 Command Orchestrators**, a **Master Specialist Collection** (45 skills), and a **Private On-Demand Rules Provider (ECC)**.
+R2 separates responsibilities into **Command Orchestrators**, a **Master Specialist Collection** (45 skills), and a **Private On-Demand Rules Provider (ECC)**.
 
 ```text
 Target Project/
@@ -40,7 +40,7 @@ Target Project/
 │   └── skills/
 │       ├── r2/                     # /r2 (Informational index & discovery hub)
 │       │   ├── SKILL.md
-│       │   ├── references/         # Fable 5.2, Opus 5.5, Claude Design suites
+│       │   ├── references/         # Fable 5.2, Opus 5.5, Claude Design suites (<700 lines each)
 │       │   ├── registry/           # Master catalog (45 skills) & dependency graph
 │       │   ├── rules/              # Private rules engine (ECC provider)
 │       │   │   ├── RULE_PROTOCOL.md
@@ -51,6 +51,8 @@ Target Project/
 │       ├── r2-init/                # /r2:init (Workspace onboarding & rules setup)
 │       ├── r2-code/                # /r2:code (Engineering orchestrator)
 │       ├── r2-debug/               # /r2:debug (Systematic triage & causal tracing)
+│       ├── r2-bug/                 # /r2:bug (Bug diagnosis & causal triage)
+│       ├── r2-plan/                # /r2:plan (Socratic requirements lock & planning)
 │       ├── r2-web/                 # /r2:web (Anti-slop creative frontend design)
 │       ├── r2-motion/              # /r2:motion (120fps motion & spring physics)
 │       └── r2-3d/                  # /r2:3d (Parametric CadQuery & 3D printing DfM)
@@ -63,17 +65,19 @@ Target Project/
 └── .gitignore                      # Includes .agents/skills/ (MUST NOT include .r2/)
 ```
 
-### The Seven Command Orchestrators
+### The Command Orchestrators
 
 | Command | Physical Path | Primary Role | Reference Injections |
 | :--- | :--- | :--- | :--- |
 | `/r2` | `.agents/skills/r2/SKILL.md` | Pure informational discovery hub & routing table | *None* |
 | `/r2:init` | `.agents/skills/r2-init/SKILL.md` | Workspace onboarding, environment scaffolding, requirement lock | *None* (Deterministic) |
-| `/r2:code` | `.agents/skills/r2-code/SKILL.md` | Full-stack engineering, Graphify navigation, Ponytail simplicity | Fable 5.2, Opus 5.5 |
-| `/r2:motion` | `.agents/skills/r2-motion/SKILL.md` | 120fps motion design, spring physics, video pipelines | Fable 5.2, Opus 5.5, Claude Design |
-| `/r2:web` | `.agents/skills/r2-web/SKILL.md` | Anti-slop creative web design, Awwwards bar, Playwright/axe QA | Fable 5.2, Opus 5.5 |
-| `/r2:debug` | `.agents/skills/r2-debug/SKILL.md` | Triage, root-cause path tracing, conditional domain routing | Fable 5.2, Opus 5.5 |
-| `/r2:3d` | `.agents/skills/r2-3d/SKILL.md` | Parametric CadQuery solid modeling, Slant 3D DfM, 3D printing verification | Fable 5.2, Opus 5.5 |
+| `/r2:code` | `.agents/skills/r2-code/SKILL.md` | Full-stack engineering, Graphify navigation, Ponytail simplicity | Opus 5.5 only |
+| `/r2:motion` | `.agents/skills/r2-motion/SKILL.md` | 120fps motion design, spring physics, video pipelines | Fable 5.2 only, Claude Design |
+| `/r2:web` | `.agents/skills/r2-web/SKILL.md` | Anti-slop creative web design, Awwwards bar, Playwright/axe QA | Fable 5.2 only |
+| `/r2:debug` | `.agents/skills/r2-debug/SKILL.md` | Triage, root-cause path tracing, conditional domain routing | Opus 5.5 only |
+| `/r2:bug` | `.agents/skills/r2-bug/SKILL.md` | Systematic bug diagnosis, root cause isolation, regression prevention | Opus 5.5 only |
+| `/r2:plan` | `.agents/skills/r2-plan/SKILL.md` | Socratic requirements lock, milestone planning, TDD blueprints | Opus 5.5 only |
+| `/r2:3d` | `.agents/skills/r2-3d/SKILL.md` | Parametric CadQuery solid modeling, Slant 3D DfM, 3D printing verification | Opus 5.5 only |
 
 ---
 

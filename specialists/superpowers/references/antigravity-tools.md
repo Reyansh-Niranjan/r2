@@ -5,19 +5,14 @@ Skills speak in actions ("dispatch a subagent", "create a todo", "read a file").
 | Action skills request | Antigravity CLI equivalent |
 |----------------------|----------------------|
 | Dispatch a subagent (`Subagent (general-purpose):` template) | `invoke_subagent` with a built-in `TypeName` — `self` for full-capability work, `research` for read-only |
-| Task tracking ("create a todo", "mark complete") | a **task artifact** — `write_to_file` with `IsArtifact: true` and `ArtifactType: "task"` (see [Task tracking](#task-tracking)). **Not** `manage_task`, which manages background processes. |
+| Task tracking ("create a todo", "mark complete") | `update_steps` — Antigravity's native live TODO checklist tool directly in the conversation UI. (Use `update_focus` alongside for phase status). **Not** `manage_task`, which manages background processes. |
 
 ## Task tracking
 
-Antigravity has **no todo tool** (`manage_task` manages background
-processes — `list`/`kill`/`status`/`send_input` — it is *not* a checklist). When a
-skill says to create a todo list or track tasks, maintain a **task artifact**: a
-markdown checklist saved with `write_to_file` (`IsArtifact: true`,
-`ArtifactMetadata.ArtifactType: "task"`), edited with `replace_file_content` /
-`multi_replace_file_content` as you go.
+Antigravity provides the native **TODO / Task List tool (`update_steps`)** to display and manage a live interactive checklist in the conversation UI.
 
-At the start of any multi-step task, create the task artifact listing every step of
-your plan. As you complete each step, edit the artifact to mark it done (`- [x]`).
-If the plan changes, update the checklist. Keep it current — it is your source of
-truth for what remains; once the conversation gets long, re-read it before starting
-each step.
+- Use `update_steps` at the start of any multi-step task (3+ steps) to publish the ordered checklist.
+- Keep task items short (2-6 words), action-oriented, and imperative (e.g. "Run test suite", "Update config").
+- Update the list live as each step starts (`in_progress`) and completes (`done`).
+- Use `update_focus` in parallel to communicate high-level phase activity.
+- **NEVER** write task lists, checklists, or checkpoint state to `TASKS.md`, `tasks.md`, or markdown task artifact files on disk. Task tracking lives strictly in the conversation UI via `update_steps`.

@@ -14,6 +14,8 @@
         "/r2:motion",
         "/r2:web",
         "/r2:debug",
+        "/r2:bug",
+        "/r2:plan",
         "/r2:3d"
       ]
     },
@@ -54,7 +56,6 @@
       "type": "code_orchestration",
       "loads_reference_prompts": true,
       "reference_prompts": [
-        ".agents/skills/r2/references/claude-fable-5.2.md",
         ".agents/skills/r2/references/claude-opus-5.5.md"
       ],
       "pipeline": [
@@ -112,8 +113,7 @@
       "type": "motion_orchestration",
       "loads_reference_prompts": true,
       "reference_prompts": [
-        ".agents/skills/r2/references/claude-fable-5.2.md",
-        ".agents/skills/r2/references/claude-opus-5.5.md"
+        ".agents/skills/r2/references/claude-fable-5.2.md"
       ],
       "inherits": "r2:code",
       "references_dir": ".agents/skills/r2/references/claude-design/",
@@ -167,8 +167,7 @@
       "type": "web_orchestration",
       "loads_reference_prompts": true,
       "reference_prompts": [
-        ".agents/skills/r2/references/claude-fable-5.2.md",
-        ".agents/skills/r2/references/claude-opus-5.5.md"
+        ".agents/skills/r2/references/claude-fable-5.2.md"
       ],
       "inherits": [
         "r2:code",
@@ -223,7 +222,6 @@
       "type": "debug_orchestration",
       "loads_reference_prompts": true,
       "reference_prompts": [
-        ".agents/skills/r2/references/claude-fable-5.2.md",
         ".agents/skills/r2/references/claude-opus-5.5.md"
       ],
       "triage_skills": [
@@ -328,7 +326,6 @@
       "type": "cad_orchestration",
       "loads_reference_prompts": true,
       "reference_prompts": [
-        ".agents/skills/r2/references/claude-fable-5.2.md",
         ".agents/skills/r2/references/claude-opus-5.5.md"
       ],
       "project_constraints": [
@@ -367,6 +364,51 @@
       ],
       "max_review_rounds": 3,
       "review_rule_file": ".r2/REVIEW.md"
+    },
+    "r2:bug": {
+      "command": "/r2:bug",
+      "name": "r2:bug",
+      "type": "bug_orchestration",
+      "loads_reference_prompts": true,
+      "reference_prompts": [
+        ".agents/skills/r2/references/claude-opus-5.5.md"
+      ],
+      "domain": "bug",
+      "activated_skills": [
+        "diagnosing-bugs",
+        "graphify",
+        "grim-prompter"
+      ],
+      "required_skills": [
+        "diagnosing-bugs",
+        "graphify"
+      ],
+      "optional_skills": [
+        "grim-prompter"
+      ],
+      "review_rule_file": ".r2/REVIEW.md"
+    },
+    "r2:plan": {
+      "command": "/r2:plan",
+      "name": "r2:plan",
+      "type": "plan_orchestration",
+      "loads_reference_prompts": true,
+      "reference_prompts": [
+        ".agents/skills/r2/references/claude-opus-5.5.md"
+      ],
+      "domain": "plan",
+      "activated_skills": [
+        "graphify",
+        "grill-me",
+        "superpowers"
+      ],
+      "required_skills": [
+        "graphify",
+        "grill-me",
+        "superpowers"
+      ],
+      "optional_skills": [],
+      "project_profile": ".r2/project-profile.json"
     }
   },
   "inter_skill_dependencies": {

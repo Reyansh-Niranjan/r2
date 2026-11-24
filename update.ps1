@@ -124,5 +124,5 @@ if ($useLocal) {
     }
 }
 
-Write-Host "Deployed 7 command skills and synced reference prompts into .agents/skills/." -ForegroundColor Cyan
+Write-Host "Deployed command skills and synced reference prompts into .agents/skills/." -ForegroundColor Cyan
 Write-Host "R2 successfully updated to $targetVersion!" -ForegroundColor Green

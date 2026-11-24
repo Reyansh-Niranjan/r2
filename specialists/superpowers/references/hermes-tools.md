@@ -53,4 +53,4 @@ If `delegate_task` is unavailable, do the work inline rather than inventing tool
 
 ## Task tracking
 
-Use the `todo` tool for task tracking within a session. For multi-agent task boards, use `hermes kanban` CLI if available. Treat older `TodoWrite` references as the task-tracking action.
+Use the `todo` tool (or environment-native task tool like `update_steps`) for task tracking within a session. For multi-agent task boards, use `hermes kanban` CLI if available. Treat any legacy task list references as native task-tracking actions.
