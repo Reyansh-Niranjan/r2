@@ -1,6 +1,6 @@
-# R2 Skill Orchestration System
+# R2 Skill Orchestration System (`v2.3.0`)
 
-**R2** is a modular, high-performance skill orchestration architecture built for **Google Antigravity** and **Gemini**. It separates meta-orchestration from specialist implementation, coordinating complex software engineering, 120fps GPU motion design, award-winning frontend experiences, systematic causal debugging, and parametric CadQuery 3D printing through a clean command hierarchy.
+**R2** is a modular skill orchestration architecture built for **Google Antigravity** and **Gemini**. It separates command routing from specialist implementation across 9 commands and 45+ specialist skills, coordinating software engineering, 120fps GPU motion design, Awwwards-standard web builds, systematic debugging, and parametric CadQuery 3D printing.
 
 ---
 
@@ -32,7 +32,7 @@ Once installed, switch to Google Antigravity or Gemini chat and run:
 
 ## 🏛️ Architecture Overview
 
-R2 separates responsibilities into **Command Orchestrators**, a **Master Specialist Collection** (45 skills), and a **Private On-Demand Rules Provider (ECC)**.
+R2 organizes its pipeline into **9 Command Orchestrators**, a **Specialist Collection** (45 bundled skills plus `skills.sh` packages), the `.agents/rules/r2-skill-gate.md` rule, and the **ECC Rules Provider**.
 
 ```text
 Target Project/
@@ -42,6 +42,7 @@ Target Project/
 │   └── skills/
 │       ├── r2/                     # /r2 (Informational index & discovery hub)
 │       │   ├── SKILL.md
+│       │   ├── VERSION             # Live deployed R2 version (2.3.0)
 │       │   ├── references/         # Fable 5.2, Opus 5.5, Claude Design suites (<700 lines each)
 │       │   ├── registry/           # Master catalog (45+ skills, skills.sh) & dependency graph
 │       │   ├── rules/              # Private rules engine (ECC provider)
@@ -85,12 +86,18 @@ Target Project/
 
 ## 🛑 Orchestration Guardrails
 
-1. **3-Round Maximum Review Cap:**
-   All execution pipelines (`/r2:code`, `/r2:web`, `/r2:motion`, `/r2:3d`) strictly cap the iteration loop between the Builder and Critique/Reviewer at **3 rounds**. If consensus, passing scores, or resolution cannot be achieved after Round 3, execution halts immediately and documents unresolved trade-offs directly to the user.
-2. **Continuous Rule Memory (`.r2/REVIEW.md`):**
-   Whenever `/r2:debug` diagnoses and resolves a defect, it appends a concise 1-line rule to `.r2/REVIEW.md`. All future runs of `/r2:code`, `/r2:web`, `/r2:motion`, and `/r2:3d` check `.r2/REVIEW.md` at startup, guaranteeing zero regression.
-3. **Strict `.r2/` Project State Isolation:**
-   Project-specific rules, hardware configurations, and requirement locks reside strictly inside `.r2/` (`.r2/project-profile.json`, `.r2/rules.md`, `.r2/hardware-profile.json`). Specialists are **never duplicated** into global `specialists/`.
+1. **Always-On Proof-of-Read Gate (`.agents/rules/r2-skill-gate.md`):**
+   Before reading workspace code or editing any file on any `/r2:*` command, the agent must inspect `.agents/skills/r2/skills/` and `skills.json`, call `view_file` / `read_file` on every matching specialist `SKILL.md` (paginating past line 800 if truncated), and emit a `SKILLS LOADED` receipt quoting one verbatim rule from each loaded file.
+2. **1:1 Scoped Reasoning Injection (< 700 Lines):**
+   Each orchestrator loads only its matching reference prompt: `/r2:web` and `/r2:motion` load `claude-fable-5.2.md`; `/r2:code`, `/r2:debug`, `/r2:bug`, `/r2:plan`, and `/r2:3d` load `claude-opus-5.5.md`. `/r2` and `/r2:init` load neither.
+3. **3-Round Maximum Review Cap:**
+   All execution pipelines (`/r2:code`, `/r2:web`, `/r2:motion`, `/r2:3d`) cap the iteration loop between Builder and Critique/Reviewer at **3 rounds**. If unresolved trade-offs remain after Round 3, execution halts and reports directly to the user.
+4. **Continuous Rule Memory (`.r2/REVIEW.md`):**
+   Whenever `/r2:debug` or `/r2:bug` diagnoses and resolves a defect, it appends a concise 1-line rule to `.r2/REVIEW.md`. Future runs check `.r2/REVIEW.md` at startup to prevent regressions.
+5. **Native UI Task Tracking (`update_steps`, Zero `TASKS.md`):**
+   Multi-step task progress runs directly in Antigravity's native UI checklist tool (`update_steps`). Agents must never write task state to `TASKS.md`, `tasks.md`, or markdown checkpoint files on disk.
+6. **Strict `.r2/` Project State Isolation:**
+   Project-specific rules, hardware configurations, and requirement locks reside strictly inside `.r2/` (`.r2/project-profile.json`, `.r2/rules.md`, `.r2/hardware-profile.json`). Specialists are never duplicated into global `specialists/`.
 
 ---
 
@@ -110,19 +117,39 @@ If any check fails, the installer aborts immediately without modifying any files
 ## 🚀 Two-Phase Installation Lifecycle
 
 ### Phase 1: Initial Windows Installer (`install.ps1`)
-- Authenticates access to the private repository.
-- Safely updates the project's `.gitignore` to ignore `.agents/skills/`.
-- Verifies that `.r2/` is NOT ignored, ensuring configuration is shareable with collaborators.
-- Deploys all 9 command skills, `.agents/rules/r2-skill-gate.md`, engine runtime assets, and specialists into `.agents/`.
-- Creates `.r2/config.json`.
+- Authenticates access to the private repository (or runs locally via `-Local`).
+- Safely updates the project's `.gitignore` to ignore `.agents/skills/`, `TASKS.md`, and `tasks.md`, while keeping `.r2/` Git-tracked.
+- Deploys all 9 command skills, `.agents/rules/r2-skill-gate.md`, `.agents/skills/r2/VERSION`, engine runtime assets, and all 45 specialists into `.agents/skills/r2/skills/` by default without manual cache steps (pass `-OnDemand` for cache-only setup).
+- Preserves any `skills.sh`-installed specialists and `.r2/` project state across installs and updates.
+- Creates or updates `.r2/config.json`.
 
 ### Phase 2: First-Time Project Setup (`/r2:init`)
 - Invoked inside Google Antigravity or Gemini chat.
-- Inspects project dependencies (`package.json`, `tsconfig.json`, `pyproject.toml`, CAD files, etc.).
-- Installs the project-relevant specialist skills from the 45-skill catalog into `.agents/skills/r2/skills/`.
-- Initializes ECC rules: downloads `common/` and detected technology packs from upstream `affaan-m/ECC` at pinned commit `d2ef2680594f9a17526a6e1a2e18b3d242c5d17b`.
-- Verifies all downloaded rules byte-for-byte using SHA-256 hashes against `manifest.json`.
+- Inspects project dependencies (`package.json`, `tsconfig.json`, `pyproject.toml`, CAD files, etc.) and reads the live R2 version from `.agents/skills/r2/VERSION` (or `.r2/config.json`).
+- Verifies `.agents/skills/r2/skills/` and `.agents/rules/r2-skill-gate.md` are present and active.
+- Offers on-demand `skills.sh` discovery (`find` / `add`) for any missing domain specialists.
+- Initializes ECC rules: downloads `common/` and detected technology packs from upstream `affaan-m/ECC` at pinned commit `d2ef2680594f9a17526a6e1a2e18b3d242c5d17b`, verified via SHA-256 against `manifest.json`.
 - Runs Socratic requirements alignment via `/grill-me` (caching answers in `.r2/project-profile.json`).
+
+---
+
+## 🌐 `skills.sh` Ecosystem Integration
+
+R2 integrates directly with [skills.sh](https://www.skills.sh/) (`vercel-labs/skills`) through `specialist-manager.py`, routing external packages into `.agents/skills/r2/skills/<skill-name>/` while keeping root `.agents/skills/` limited to the 9 R2 commands:
+
+```powershell
+# Search skills.sh (supports --owner <org>)
+python .agents/skills/r2/scripts/specialist-manager.py find "react"
+
+# Install verbatim from <owner/repo> or <owner/repo>/<skill>
+python .agents/skills/r2/scripts/specialist-manager.py add vercel-labs/agent-skills
+python .agents/skills/r2/scripts/specialist-manager.py add vercel-labs/skills/find-skills --domain plan
+
+# Update skills.sh packages and re-sync skills.json + r2/SKILL.md
+python .agents/skills/r2/scripts/specialist-manager.py update
+```
+
+Every `add` and `update` copies the package verbatim (never rewritten from memory), registers metadata in `skills.json` (`source: "skills.sh"`), syncs the Specialist Skill Registry table in `r2/SKILL.md`, and blocks excluded packages (`SkillSpector`, `OmniRoute`, `Agent Vault`, `claude-auto-handoff`, `Gemini Flash TTS`, `reanimate`, `unslop`, `hallmark`, `scrapling`, `strix`, `stitch-skills`).
 
 ---
 
@@ -148,9 +175,14 @@ If any check fails, the installer aborts immediately without modifying any files
 ## 🔄 Updates & Maintenance
 
 ### Check & Apply Updates
-To update R2 to the latest release while preserving project `.r2/` state:
+To update R2 from GitHub while preserving `.r2/` project state and `skills.sh` packages:
 ```powershell
 & ([scriptblock]::Create((gh api -H "Accept: application/vnd.github.raw+json" repos/Reyansh-Niranjan/r2/contents/update.ps1)))
+```
+
+Or update directly from a local canonical clone (`D:\R2`):
+```powershell
+D:\R2\update.ps1 -Local -Force
 ```
 
 ### Safe Uninstallation
