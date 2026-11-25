@@ -37,17 +37,19 @@ R2 separates responsibilities into **Command Orchestrators**, a **Master Special
 ```text
 Target Project/
 ├── .agents/
+│   ├── rules/
+│   │   └── r2-skill-gate.md        # Always-on Proof-of-Read Specialist Skill Gate
 │   └── skills/
 │       ├── r2/                     # /r2 (Informational index & discovery hub)
 │       │   ├── SKILL.md
 │       │   ├── references/         # Fable 5.2, Opus 5.5, Claude Design suites (<700 lines each)
-│       │   ├── registry/           # Master catalog (45 skills) & dependency graph
+│       │   ├── registry/           # Master catalog (45+ skills, skills.sh) & dependency graph
 │       │   ├── rules/              # Private rules engine (ECC provider)
 │       │   │   ├── RULE_PROTOCOL.md
 │       │   │   ├── manifest.json
 │       │   │   ├── loader.py
 │       │   │   └── .gitignore      # Ignores ecc/ rule directory
-│       │   └── skills/             # Onboarded specialist skills
+│       │   └── skills/             # Onboarded & skills.sh specialist skills
 │       ├── r2-init/                # /r2:init (Workspace onboarding & rules setup)
 │       ├── r2-code/                # /r2:code (Engineering orchestrator)
 │       ├── r2-debug/               # /r2:debug (Systematic triage & causal tracing)
@@ -111,7 +113,7 @@ If any check fails, the installer aborts immediately without modifying any files
 - Authenticates access to the private repository.
 - Safely updates the project's `.gitignore` to ignore `.agents/skills/`.
 - Verifies that `.r2/` is NOT ignored, ensuring configuration is shareable with collaborators.
-- Deploys the 7 command skills and engine runtime assets into `.agents/skills/`.
+- Deploys all 9 command skills, `.agents/rules/r2-skill-gate.md`, engine runtime assets, and specialists into `.agents/`.
 - Creates `.r2/config.json`.
 
 ### Phase 2: First-Time Project Setup (`/r2:init`)

@@ -8,12 +8,15 @@ param(
 
     [switch]$Local,
     [switch]$Force,
-    [switch]$AllSpecialists
+    [switch]$AllSpecialists,
+    [switch]$OnDemand
 )
 
 $ErrorActionPreference = "Stop"
 $REPO = "Reyansh-Niranjan/r2"
 $REQUIRED_USER = "Reyansh-Niranjan"
+
+$deployAllSpecialists = $AllSpecialists.IsPresent -or (-not $OnDemand.IsPresent)
 
 # Resolve target directory
 if (-not (Test-Path $TargetDirectory)) {
@@ -31,6 +34,22 @@ if (-not (Test-Path $r2Config)) {
 
 $localConfig = Get-Content $r2Config -Raw | ConvertFrom-Json
 $localVersion = $localConfig.version
+
+# Detect whether required assets (9 commands, r2-skill-gate.md, or specialists) are missing
+$expectedCommands = @("r2", "r2-init", "r2-code", "r2-debug", "r2-bug", "r2-plan", "r2-web", "r2-motion", "r2-3d")
+$missingAssets = $false
+foreach ($cmd in $expectedCommands) {
+    if (-not (Test-Path (Join-Path $TargetDirectory ".agents\skills\$cmd\SKILL.md"))) {
+        $missingAssets = $true
+        break
+    }
+}
+if (-not (Test-Path (Join-Path $TargetDirectory ".agents\rules\r2-skill-gate.md"))) {
+    $missingAssets = $true
+}
+if ($deployAllSpecialists -and ($localConfig.specialists_mode -ne "all" -or -not (Test-Path (Join-Path $TargetDirectory ".agents\skills\r2\skills")))) {
+    $missingAssets = $true
+}
 
 # Detect local R2 repository candidate ($PSScriptRoot or D:\R2)
 $localRepo = $null
@@ -65,7 +84,7 @@ if (-not $useLocal) {
         Write-Host "Local Installed Version: $localVersion"
         Write-Host "Upstream Remote Version: $remoteVersion"
 
-        if ($localVersion -eq $remoteVersion -and (-not $Force)) {
+        if ($localVersion -eq $remoteVersion -and (-not $Force) -and (-not $missingAssets)) {
             Write-Host "R2 is already up to date (version $localVersion)." -ForegroundColor Green
             exit 0
         }
@@ -92,7 +111,7 @@ if ($useLocal) {
     Write-Host "Local Installed Version: $localVersion"
     Write-Host "Local Repository Version: $localRepoVersion"
 
-    if ($localVersion -eq $localRepoVersion -and (-not $Force)) {
+    if ($localVersion -eq $localRepoVersion -and (-not $Force) -and (-not $missingAssets)) {
         Write-Host "R2 is already up to date (version $localVersion)." -ForegroundColor Green
         exit 0
     }
@@ -106,8 +125,11 @@ $installParams = @{
     TargetDirectory = $TargetDirectory
     Force = $true
 }
-if ($AllSpecialists) {
+if ($deployAllSpecialists) {
     $installParams["AllSpecialists"] = $true
+}
+if ($OnDemand) {
+    $installParams["OnDemand"] = $true
 }
 
 if ($useLocal) {
@@ -124,5 +146,5 @@ if ($useLocal) {
     }
 }
 
-Write-Host "Deployed command skills and synced reference prompts into .agents/skills/." -ForegroundColor Cyan
+Write-Host "Deployed all 9 command skills, .agents/rules/r2-skill-gate.md, and synced reference prompts." -ForegroundColor Cyan
 Write-Host "R2 successfully updated to $targetVersion!" -ForegroundColor Green

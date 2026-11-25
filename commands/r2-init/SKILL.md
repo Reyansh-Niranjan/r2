@@ -42,7 +42,15 @@ Ensure all 45 specialist skills reside in [.agents/skills/r2/skills/](.agents/sk
 - **Core & Engineering (21):** `arena`, `codebase-design`, `context7`, `diagnosing-bugs`, `domain-modeling`, `graphify`, `grill-me`, `grim-prompter`, `humanizer`, `improve-codebase-architecture`, `karpathy-guidelines`, `persona-critique`, `ponytail`, `ponytail-audit`, `ponytail-debt`, `ponytail-gain`, `ponytail-help`, `ponytail-review`, `research`, `slopmonster`, `superpowers`.
 - **Frontend & Motion (19):** `animate`, `animation-vocabulary`, `apple-design`, `awwwards`, `brag-slim`, `design-taste-frontend`, `emil-design-eng`, `find-animation-opportunities`, `impeccable`, `jury`, `minimalist-ui`, `mobile-native`, `motion`, `refero-design`, `review-animations`, `setup-matt-pocock-skills`, `shieldcn-badges`, `video-analyzer`, `watch`.
 - **CAD & 3D Printing (5):** `3d-print-skill`, `cad-agent`, `cadquery-modeling`, `cad-skill`, `three-d-printer`.
-- **Constraint:** Keep root `.agents/skills/` clean (only the 7 command skills: `/r2`, `/r2:init`, `/r2:code`, `/r2:motion`, `/r2:web`, `/r2:debug`, `/r2:3d`). All 45 specialist implementations stay strictly inside `.agents/skills/r2/skills/`. Verify registry synchronization in [.agents/skills/r2/registry/skills.json](.agents/skills/r2/registry/skills.json).
+- **Constraint:** Keep root `.agents/skills/` clean (only the 9 command skills: `/r2`, `/r2:init`, `/r2:code`, `/r2:debug`, `/r2:bug`, `/r2:plan`, `/r2:motion`, `/r2:web`, `/r2:3d`). All specialist implementations stay strictly inside `.agents/skills/r2/skills/`. Verify registry synchronization in [.agents/skills/r2/registry/skills.json](.agents/skills/r2/registry/skills.json).
+
+### `skills.sh` Missing Domain Specialist Discovery (Optional On-Demand)
+If Step 1 detects a stack or workflow (e.g., Supabase, Next.js, Stripe, Expo, Rust) that lacks a matching specialist in `.agents/skills/r2/skills/`, offer to search and install from [skills.sh](https://www.skills.sh/) (`vercel-labs/skills` `find-skills`) for Antigravity:
+```powershell
+python .agents/skills/r2/scripts/specialist-manager.py find "<detected-tech>"
+python .agents/skills/r2/scripts/specialist-manager.py add <owner/repo>
+```
+`specialist-manager.py` runs `npx skills add ... -a antigravity -y --copy` in an isolated staging dir, routes files verbatim into `.agents/skills/r2/skills/<skill-name>/SKILL.md`, registers metadata in `skills.json` (`source: "skills.sh"`), syncs `.agents/skills/r2/SKILL.md`, and enforces R2's exclusion list (`SkillSpector`, `OmniRoute`, `Agent Vault`, `claude-auto-handoff`, `Gemini Flash TTS`, `reanimate`, `unslop`, `hallmark`, `scrapling`, `strix`, `stitch-skills`).
 
 ### Step 3: Setup & Onboarding Workflows
 Execute the standard scaffolding tasks in order:
@@ -98,5 +106,6 @@ Execute the standard scaffolding tasks in order:
    Ensure `.agents/skills/r2/rules/.gitignore` contains `ecc/` so rule files remain strictly private and uncommitted.
 
 ### Step 5: Verify & Update Registry
-- Verify every skill in `.agents/skills/r2/skills/` has a valid `SKILL.md`.
-- Update [.agents/skills/r2/registry/skills.json](.agents/skills/r2/registry/skills.json) with current scan status and timestamps.
+- Verify every skill in `.agents/skills/r2/skills/` has a valid `SKILL.md` (`python .agents/skills/r2/scripts/specialist-manager.py verify`).
+- Verify [.agents/rules/r2-skill-gate.md](.agents/rules/r2-skill-gate.md) is deployed so the Proof-of-Read Gate is active on every `/r2:*` command.
+- Update [.agents/skills/r2/registry/skills.json](.agents/skills/r2/registry/skills.json) and [.agents/skills/r2/SKILL.md](.agents/skills/r2/SKILL.md) with current scan status (`python .agents/skills/r2/scripts/specialist-manager.py sync`).

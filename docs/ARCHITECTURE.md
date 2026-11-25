@@ -4,6 +4,8 @@
 
 ```text
 .agents/
+├── rules/
+│   └── r2-skill-gate.md          # Always-on Proof-of-Read Gate (SKILLS LOADED receipt)
 └── skills/
     ├── r2/                       # Primary index & engine root
     │   ├── SKILL.md              # Informs the agent; never executes specialist work
@@ -12,17 +14,19 @@
     │   │   ├── claude-opus-5.5.md
     │   │   └── claude-design/
     │   ├── registry/             # Master catalogs
-    │   │   ├── skills.json       # 45 specialist catalog definitions
+    │   │   ├── skills.json       # Specialist catalog definitions (incl. skills.sh)
     │   │   └── dependencies.json # Dependency graph & routing rules
     │   ├── rules/                # ECC rules-only provider
     │   │   ├── RULE_PROTOCOL.md
     │   │   ├── manifest.json
     │   │   ├── loader.py
     │   │   └── ecc/              # Local, Git-ignored rule files
-    │   └── skills/               # Specialist skill collection (45 skills)
+    │   └── skills/               # Specialist skill collection (incl. skills.sh)
     ├── r2-init/                  # /r2:init (scaffolding & installation)
     ├── r2-code/                  # /r2:code (engineering orchestrator)
     ├── r2-debug/                 # /r2:debug (triage & diagnostic orchestrator)
+    ├── r2-bug/                   # /r2:bug (bug diagnosis & causal triage)
+    ├── r2-plan/                  # /r2:plan (Socratic requirements lock & TDD planning)
     ├── r2-web/                   # /r2:web (frontend anti-slop orchestrator)
     ├── r2-motion/                # /r2:motion (motion & animation orchestrator)
     └── r2-3d/                    # /r2:3d (parametric CadQuery & 3D printing orchestrator)

@@ -7,6 +7,7 @@ param(
     [string]$TargetDirectory = (Get-Location).Path,
 
     [switch]$AllSpecialists,
+    [switch]$OnDemand,
     [switch]$Force,
     [switch]$Local,
     [switch]$SkipAuthCheck
@@ -16,6 +17,7 @@ $ErrorActionPreference = "Stop"
 
 $REPO = "Reyansh-Niranjan/r2"
 $REQUIRED_USER = "Reyansh-Niranjan"
+$deployAllSpecialists = $AllSpecialists.IsPresent -or (-not $OnDemand.IsPresent)
 
 if ($Local) {
     $SkipAuthCheck = $true
@@ -198,17 +200,45 @@ try {
         Remove-Item -Path $_.FullName -Recurse -Force
     }
 
-    # 2. Clean .agents/skills/r2 (engine & specialists container)
+    # 2. Clean .agents/skills/r2 (engine & specialists container) while preserving skills.sh packages
     $r2TargetDir = Join-Path $skillsDir "r2"
+    $preservedSkillsSh = @{}
+    $preservedLockJson = $null
+
     if (Test-Path $r2TargetDir) {
-        # Prune orphan specialist skills inside .agents/skills/r2/skills/
+        $existingRegistryFile = Join-Path $r2TargetDir "registry\skills.json"
+        if (Test-Path $existingRegistryFile) {
+            try {
+                $existingRegObj = Get-Content -Path $existingRegistryFile -Raw | ConvertFrom-Json
+                if ($existingRegObj -and $existingRegObj.skills) {
+                    foreach ($prop in $existingRegObj.skills.PSObject.Properties) {
+                        if ($prop.Value.source -eq "skills.sh") {
+                            $preservedSkillsSh[$prop.Name] = $prop.Value
+                        }
+                    }
+                }
+            } catch {
+                $preservedSkillsSh = @{}
+            }
+        }
+        $existingLockFile = Join-Path $r2TargetDir "registry\skills-sh-lock.json"
+        if (Test-Path $existingLockFile) {
+            $preservedLockJson = Get-Content -Path $existingLockFile -Raw -ErrorAction SilentlyContinue
+        }
+
+        # Prune orphan specialist skills inside .agents/skills/r2/skills/ (preserve canonical & skills.sh)
         $r2SkillsDir = Join-Path $r2TargetDir "skills"
         if (Test-Path $r2SkillsDir) {
-            $orphanSkills = Get-ChildItem -Path $r2SkillsDir -Directory | Where-Object { $_.Name -notin $validSpecialists }
+            $orphanSkills = Get-ChildItem -Path $r2SkillsDir -Directory | Where-Object {
+                ($_.Name -notin $validSpecialists) -and (-not $preservedSkillsSh.ContainsKey($_.Name))
+            }
             foreach ($orphan in $orphanSkills) {
                 Write-Host "  -> Removing orphan specialist skill: r2/skills/$($orphan.Name)" -ForegroundColor Yellow
                 Remove-Item -Path $orphan.FullName -Recurse -Force
             }
+        }
+        if ($preservedSkillsSh.Count -gt 0) {
+            Write-Host "  [OK] Preserving $($preservedSkillsSh.Count) skills.sh specialist(s): $($preservedSkillsSh.Keys -join ', ')" -ForegroundColor Green
         }
 
         # Remove previous engine runtime folders and caches to ensure a clean slate (leave skills/ intact)
@@ -237,7 +267,7 @@ try {
         Write-Host "  [OK] Preserving target project .r2/ state: $($foundState -join ', ')" -ForegroundColor Green
     }
 
-    # Install the 7 command skills into .agents/skills/
+    # Install all 9 command skills into .agents/skills/
     $commandsSource = Join-Path $sourceDir "commands"
     if (Test-Path $commandsSource) {
         Get-ChildItem -Path $commandsSource -Directory | ForEach-Object {
@@ -256,16 +286,26 @@ try {
     if (Test-Path $engineSource) {
         Copy-Item -Path (Join-Path $engineSource "*") -Destination $r2TargetDir -Recurse -Force
         Write-Host "  -> Installed R2 engine runtime & synced reference prompts (claude-fable-5.2.md, claude-opus-5.5.md, registry, rules, scripts)." -ForegroundColor Cyan
+
+        # Deploy always-on Proof-of-Read Skill Gate rule to .agents/rules/r2-skill-gate.md
+        $rulesTargetDir = Join-Path $TargetDirectory ".agents\rules"
+        if (-not (Test-Path $rulesTargetDir)) {
+            New-Item -ItemType Directory -Path $rulesTargetDir -Force | Out-Null
+        }
+        $skillGateSource = Join-Path $engineSource "rules\r2-skill-gate.md"
+        if (Test-Path $skillGateSource) {
+            Copy-Item -Path $skillGateSource -Destination (Join-Path $rulesTargetDir "r2-skill-gate.md") -Force
+            Write-Host "  -> Deployed always-on Proof-of-Read rule: .agents/rules/r2-skill-gate.md" -ForegroundColor Green
+        }
     }
 
-    # Cache specialists so /r2:init can deploy offline or on-demand
+    # Cache specialists AND populate .agents/skills/r2/skills/ by default (no manual cache steps needed)
     if (Test-Path $specialistsSource) {
         $cacheDir = Join-Path $r2TargetDir "specialists_cache"
         Copy-Item -Path $specialistsSource -Destination $cacheDir -Recurse -Force
-        Write-Host "  -> Cached specialist catalog for on-demand onboarding." -ForegroundColor Cyan
+        Write-Host "  -> Cached specialist catalog." -ForegroundColor Cyan
 
-        # If -AllSpecialists requested, populate .agents/skills/r2/skills/ immediately
-        if ($AllSpecialists) {
+        if ($deployAllSpecialists) {
             $specialistDest = Join-Path $r2TargetDir "skills"
             if (-not (Test-Path $specialistDest)) {
                 New-Item -ItemType Directory -Path $specialistDest -Force | Out-Null
@@ -275,8 +315,32 @@ try {
         }
     }
 
+    # Re-merge any preserved skills.sh registry entries & lockfile and sync SKILL.md table
+    if ($preservedSkillsSh.Count -gt 0) {
+        $targetRegistryFile = Join-Path $r2TargetDir "registry\skills.json"
+        if (Test-Path $targetRegistryFile) {
+            $regObj = Get-Content -Path $targetRegistryFile -Raw | ConvertFrom-Json
+            foreach ($k in $preservedSkillsSh.Keys) {
+                $regObj.skills | Add-Member -MemberType NoteProperty -Name $k -Value $preservedSkillsSh[$k] -Force
+            }
+            $totalCount = ($regObj.skills.PSObject.Properties | Measure-Object).Count
+            $regObj.total_skills = $totalCount
+            $regObj.description = "Master registry of $totalCount specialized skills for R2 Skill Orchestration System"
+            [System.IO.File]::WriteAllText($targetRegistryFile, ($regObj | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
+        }
+        if ($preservedLockJson) {
+            [System.IO.File]::WriteAllText((Join-Path $r2TargetDir "registry\skills-sh-lock.json"), $preservedLockJson, [System.Text.UTF8Encoding]::new($false))
+        }
+        if (Get-Command python -ErrorAction SilentlyContinue) {
+            $mgrScript = Join-Path $r2TargetDir "scripts\specialist-manager.py"
+            if (Test-Path $mgrScript) {
+                & python $mgrScript sync | Out-Null
+            }
+        }
+    }
+
     # Update .r2/config.json
-    $version = "2.2.0"
+    $version = "2.3.0"
     $versionFile = Join-Path $sourceDir "VERSION"
     if (Test-Path $versionFile) {
         $version = (Get-Content $versionFile -Raw).Trim()
@@ -289,7 +353,8 @@ try {
         "installed_at" = if ($existingConfig.ContainsKey("installed_at")) { $existingConfig["installed_at"] } else { $now }
         "updated_at" = $now
         "commands" = @("r2", "r2-init", "r2-code", "r2-debug", "r2-bug", "r2-plan", "r2-web", "r2-motion", "r2-3d")
-        "specialists_mode" = if ($AllSpecialists) { "all" } else { "on_demand" }
+        "specialists_mode" = if ($deployAllSpecialists) { "all" } else { "on_demand" }
+        "skill_gate_rule" = ".agents/rules/r2-skill-gate.md"
         "status" = "ready"
     }
 

@@ -24,6 +24,12 @@ foreach ($cmd in $commands) {
     }
 }
 
+$skillGateRule = Join-Path $TargetDirectory ".agents\rules\r2-skill-gate.md"
+if (Test-Path $skillGateRule) {
+    Remove-Item -Path $skillGateRule -Force
+    Write-Host "Removed .agents/rules/r2-skill-gate.md" -ForegroundColor Cyan
+}
+
 if ($PurgeState) {
     $r2Dir = Join-Path $TargetDirectory ".r2"
     if (Test-Path $r2Dir) {

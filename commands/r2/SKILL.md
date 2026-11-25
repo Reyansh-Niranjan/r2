@@ -7,7 +7,7 @@ description: "R2 Skill Orchestration System — Central ecosystem overview, rout
 
 Welcome to the **R2 Skill Orchestration System**, a high-performance orchestration architecture designed for Antigravity and Gemini.
 
-R2 separates **meta-orchestration** from **specialist implementation**. The 7 orchestrators coordinate workflows, resolve dependency graphs, and delegate bounded tasks to specialist skills.
+R2 separates **meta-orchestration** from **specialist implementation**. The 9 commands coordinate workflows, resolve dependency graphs, and delegate bounded tasks to specialist skills.
 
 ---
 
@@ -38,6 +38,7 @@ On Windows 11 NTFS, directories are safely isolated using hyphens while YAML com
 5. **Private Rules Provider (ECC):** Coding rules are sourced exclusively from `affaan-m/ECC/rules/`, stored privately in `.agents/skills/r2/rules/ecc/` (Git-ignored), and governed by [.agents/skills/r2/rules/RULE_PROTOCOL.md](.agents/skills/r2/rules/RULE_PROTOCOL.md). Rule files are byte-for-byte immutable and adhere strictly to the 6-tier precedence hierarchy (System > User > R2 Safety > Project > ECC Rules > Specialist).
 6. **Strict 3-Round Review Cap & Continuous Rule Memory:** All execution orchestrators (`/r2:code`, `/r2:web`, `/r2:motion`, `/r2:3d`) cap Builder <-> Critique review iterations at a maximum of 3 rounds. Bugs diagnosed by `/r2:debug` append a 1-line rule to `.r2/REVIEW.md`, which all future runs enforce automatically.
 7. **Native Task Tracking (Zero Markdown File Workarounds):** Multi-step task progress MUST be tracked directly in the conversation UI using Antigravity's native TODO / Task List tool (`update_steps`). Agents MUST NEVER create, read, or write to `TASKS.md`, `tasks.md`, or any markdown checkpoint files on disk.
+8. **Mandatory Proof-of-Read Gate (`.agents/rules/r2-skill-gate.md`):** Before reading workspace code or editing any file on any `/r2:*` command, agents MUST read EVERY domain-matching specialist `SKILL.md` inside `.agents/skills/r2/skills/` (paginating past line 800 if needed) and emit a `SKILLS LOADED` receipt quoting one verbatim rule from each file. No receipt = no edits allowed.
 
 ---
 
@@ -95,8 +96,31 @@ Antigravity auto-indexes one directory level deep (`.agents/skills/<name>/SKILL.
 
 ---
 
+## `skills.sh` Ecosystem Integration (On-Demand Discovery & Installs)
+
+R2 natively integrates the open [skills.sh](https://www.skills.sh/) ecosystem (`vercel-labs/skills`) via `specialist-manager.py`:
+
+- **Search & Discover (`find-skills`):**
+  ```powershell
+  python .agents/skills/r2/scripts/specialist-manager.py find "<query>" [--owner <owner>]
+  ```
+- **Install Verbatim (`<owner/repo>` or `<owner/repo>/<skill>`):**
+  ```powershell
+  python .agents/skills/r2/scripts/specialist-manager.py add <owner/repo> [--domain web|motion|code|3d|plan|bug]
+  python .agents/skills/r2/scripts/specialist-manager.py add <owner/repo>/<skill>
+  ```
+  Packages are fetched via `npx skills add ... -a antigravity -y --copy` inside an isolated staging directory, copied **verbatim** (never rewritten from memory) into `.agents/skills/r2/skills/<skill-name>/SKILL.md`, auto-registered into `skills.json` (`source: "skills.sh"`), and auto-synced into the Specialist Skill Registry table above while keeping root `.agents/skills/` uncluttered.
+- **Update Installed `skills.sh` Packages:**
+  ```powershell
+  python .agents/skills/r2/scripts/specialist-manager.py update [skill-names...]
+  ```
+- **Strict Exclusion Guard:** Never installs or registers `SkillSpector`, `OmniRoute`, `Agent Vault`, `claude-auto-handoff`, `Gemini Flash TTS`, `reanimate`, `unslop`, `hallmark`, `scrapling`, `strix`, or `stitch-skills`.
+
+---
+
 ## Registries & References
 
+- **Always-On Skill Gate Rule:** [.agents/rules/r2-skill-gate.md](.agents/rules/r2-skill-gate.md)
 - **Master Catalog:** [.agents/skills/r2/registry/skills.json](.agents/skills/r2/registry/skills.json) (45 specialist skills)
 - **Dependency Graph:** [.agents/skills/r2/registry/dependencies.json](.agents/skills/r2/registry/dependencies.json)
 - **Specialist Skills Directory:** `.agents/skills/r2/skills/`
