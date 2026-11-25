@@ -105,7 +105,25 @@ Execute the standard scaffolding tasks in order:
 5. **Git Privacy Verification:**
    Ensure `.agents/skills/r2/rules/.gitignore` contains `ecc/` so rule files remain strictly private and uncommitted.
 
-### Step 5: Verify & Update Registry
-- Verify every skill in `.agents/skills/r2/skills/` has a valid `SKILL.md` (`python .agents/skills/r2/scripts/specialist-manager.py verify`).
-- Verify [.agents/rules/r2-skill-gate.md](.agents/rules/r2-skill-gate.md) is deployed so the Proof-of-Read Gate is active on every `/r2:*` command.
-- Update [.agents/skills/r2/registry/skills.json](.agents/skills/r2/registry/skills.json) and [.agents/skills/r2/SKILL.md](.agents/skills/r2/SKILL.md) with current scan status (`python .agents/skills/r2/scripts/specialist-manager.py sync`).
+### Step 5: Verify & Update Registry + Active Gate Rule
+1. **Read Live R2 Version:** Read the active installed version dynamically from [.agents/skills/r2/VERSION](.agents/skills/r2/VERSION) (falling back to `.r2/config.json` `"version"` field). **NEVER** hardcode or guess a version string.
+2. **Verify Installed Specialists:** Run `python .agents/skills/r2/scripts/specialist-manager.py verify` to confirm every specialist in `.agents/skills/r2/skills/` has a valid `SKILL.md`.
+3. **Verify Always-On Proof-of-Read Gate:** Confirm [.agents/rules/r2-skill-gate.md](.agents/rules/r2-skill-gate.md) exists on disk and is active so every `/r2:*` command emits a `SKILLS LOADED` receipt before workspace code reads or edits.
+4. **Sync Registry & Table:** Run `python .agents/skills/r2/scripts/specialist-manager.py sync` to synchronize [.agents/skills/r2/registry/skills.json](.agents/skills/r2/registry/skills.json) and [.agents/skills/r2/SKILL.md](.agents/skills/r2/SKILL.md).
+
+### Step 6: Print Live Initialization Summary
+Conclude `/r2:init` by reporting the live status using ONLY the dynamically read version, verified `.agents/rules/r2-skill-gate.md` state, and the exact **9-command** 1:1 reasoning routing table:
+- **Installed R2 Version:** `<live value from .agents/skills/r2/VERSION or .r2/config.json>`
+- **Proof-of-Read Gate:** `.agents/rules/r2-skill-gate.md` (`ACTIVE` / `MISSING`)
+- **Available R2 Commands (9):**
+  | Command | Role | Reasoning Injection (1:1) |
+  | :--- | :--- | :--- |
+  | `/r2` | Central index & discovery hub | *None* |
+  | `/r2:init` | Workspace onboarding & `.r2/` state setup | *None* |
+  | `/r2:code` | Full-stack engineering & simplicity constraints | `Opus 5.5` (`claude-opus-5.5.md`) |
+  | `/r2:web` | Anti-slop creative frontend design | `Fable 5.2` (`claude-fable-5.2.md`) |
+  | `/r2:motion` | 120fps GPU animation & spring physics | `Fable 5.2` (`claude-fable-5.2.md`) |
+  | `/r2:debug` | Empirical triage, root-cause tracing & routing | `Opus 5.5` (`claude-opus-5.5.md`) |
+  | `/r2:bug` | Systematic bug diagnosis & regression prevention | `Opus 5.5` (`claude-opus-5.5.md`) |
+  | `/r2:plan` | Socratic requirements lock & TDD milestones | `Opus 5.5` (`claude-opus-5.5.md`) |
+  | `/r2:3d` | Parametric CadQuery solid modeling & 3D printing DfM | `Opus 5.5` (`claude-opus-5.5.md`) |

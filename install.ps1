@@ -339,11 +339,14 @@ try {
         }
     }
 
-    # Update .r2/config.json
+    # Update .r2/config.json and deploy .agents/skills/r2/VERSION
     $version = "2.3.0"
     $versionFile = Join-Path $sourceDir "VERSION"
     if (Test-Path $versionFile) {
         $version = (Get-Content $versionFile -Raw).Trim()
+        Copy-Item -Path $versionFile -Destination (Join-Path $r2TargetDir "VERSION") -Force
+    } else {
+        [System.IO.File]::WriteAllText((Join-Path $r2TargetDir "VERSION"), "$version`n", [System.Text.UTF8Encoding]::new($false))
     }
 
     $now = (Get-Date).ToString("o")

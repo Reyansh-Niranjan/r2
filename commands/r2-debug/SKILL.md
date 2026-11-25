@@ -1,6 +1,6 @@
 ---
 name: r2:debug
-description: "R2 Systematic Debugging & Triage Orchestrator. Activates Claude Fable 5.2 and Opus 5.5 reasoning prompts, gathers empirical evidence and traces root causes via Graphify, conditionally routes problems to /r2:code, /r2:web, /r2:motion, /r2:3d, or read-only Grim-Prompter threat modeling, and persists prevention rules to .r2/REVIEW.md."
+description: "R2 Systematic Debugging & Triage Orchestrator. Activates Opus 5.5 reasoning prompt only, gathers empirical evidence and traces root causes via Graphify, conditionally routes problems to /r2:code, /r2:web, /r2:motion, /r2:3d, or read-only Grim-Prompter threat modeling, and persists prevention rules to .r2/REVIEW.md."
 ---
 
 # /r2:debug — R2 Systematic Debugging & Triage Orchestrator

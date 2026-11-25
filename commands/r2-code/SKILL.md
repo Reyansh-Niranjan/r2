@@ -1,6 +1,6 @@
 ---
 name: r2:code
-description: "R2 Code & Engineering Orchestrator. Activates Claude Fable 5.2 and Opus 5.5 reasoning prompts, checks .r2/REVIEW.md prevention rules, navigates codebases via Graphify knowledge graphs, enforces Ponytail minimal stdlib-first solutions and Karpathy guidelines, looks up live docs via Context7, and executes the Planner -> Builder -> Persona-Critique lifecycle with a strict 3-round review cap."
+description: "R2 Code & Engineering Orchestrator. Activates Opus 5.5 reasoning prompt only, checks .r2/REVIEW.md prevention rules, navigates codebases via Graphify knowledge graphs, enforces Ponytail minimal stdlib-first solutions and Karpathy guidelines, looks up live docs via Context7, and executes the Planner -> Builder -> Persona-Critique lifecycle with a strict 3-round review cap."
 ---
 
 # /r2:code — R2 Code & Engineering Orchestrator

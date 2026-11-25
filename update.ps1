@@ -27,15 +27,22 @@ $TargetDirectory = (Resolve-Path $TargetDirectory).Path
 Write-Host "Checking for R2 updates for target: $TargetDirectory" -ForegroundColor Cyan
 
 $r2Config = Join-Path $TargetDirectory ".r2\config.json"
-if (-not (Test-Path $r2Config)) {
-    Write-Error "No existing R2 installation found at $TargetDirectory. Run install.ps1 first."
-    exit 1
+$localConfig = $null
+$localVersion = "0.0.0"
+if (Test-Path $r2Config) {
+    $localConfig = Get-Content $r2Config -Raw | ConvertFrom-Json
+    $localVersion = $localConfig.version
+} else {
+    $hasLegacyR2 = (Test-Path (Join-Path $TargetDirectory ".agents\skills\r2")) -or ((Get-ChildItem -Path (Join-Path $TargetDirectory ".agents\skills") -Directory -Filter "r2-*" -ErrorAction SilentlyContinue).Count -gt 0)
+    if ($hasLegacyR2 -or $Force) {
+        Write-Host "No .r2/config.json found; treating target as legacy/fresh R2 install for update." -ForegroundColor Yellow
+    } else {
+        Write-Error "No existing R2 installation found at $TargetDirectory. Run install.ps1 first."
+        exit 1
+    }
 }
 
-$localConfig = Get-Content $r2Config -Raw | ConvertFrom-Json
-$localVersion = $localConfig.version
-
-# Detect whether required assets (9 commands, r2-skill-gate.md, or specialists) are missing
+# Detect whether required assets (9 commands, r2-skill-gate.md, VERSION, or specialists) are missing
 $expectedCommands = @("r2", "r2-init", "r2-code", "r2-debug", "r2-bug", "r2-plan", "r2-web", "r2-motion", "r2-3d")
 $missingAssets = $false
 foreach ($cmd in $expectedCommands) {
@@ -47,7 +54,11 @@ foreach ($cmd in $expectedCommands) {
 if (-not (Test-Path (Join-Path $TargetDirectory ".agents\rules\r2-skill-gate.md"))) {
     $missingAssets = $true
 }
-if ($deployAllSpecialists -and ($localConfig.specialists_mode -ne "all" -or -not (Test-Path (Join-Path $TargetDirectory ".agents\skills\r2\skills")))) {
+if (-not (Test-Path (Join-Path $TargetDirectory ".agents\skills\r2\VERSION"))) {
+    $missingAssets = $true
+}
+$installedSpecialistsMode = if ($localConfig -and $localConfig.specialists_mode) { $localConfig.specialists_mode } else { "" }
+if ($deployAllSpecialists -and ($installedSpecialistsMode -ne "all" -or -not (Test-Path (Join-Path $TargetDirectory ".agents\skills\r2\skills")))) {
     $missingAssets = $true
 }
 
